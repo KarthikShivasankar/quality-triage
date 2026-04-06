@@ -1,98 +1,61 @@
-# Repository Guidelines
+# Agent Compatibility Guide
 
-AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification.
+This file is a lightweight compatibility entrypoint for AI coding agents.
 
-## Project Structure
+Canonical behavior lives in:
+- [`skills.md`](skills.md)
 
-```
-Quality_Triage/
-├── src/code_review_agent/   # Main package
-│   ├── agent.py             # Core review agent logic
-│   ├── cli.py               # Command-line interface
-│   ├── config.py            # Configuration loader
-│   ├── code_intel.py        # Code intelligence analysis
-│   ├── github_utils.py      # GitHub cloning utilities
-│   ├── prompts.py           # LLM prompt templates
-│   ├── reporter.py          # Report generation
-│   └── tools.py             # Code analysis tools
-├── config.yaml              # Application configuration
-├── pyproject.toml           # Project metadata & dependencies
-└── uv.lock                  # Dependency lock file
-```
+Claude Code operational details live in:
+- [`docs/claude-code.md`](docs/claude-code.md)
 
-## Build, Test, and Development Commands
+## Quick Agent Start
 
 ```bash
-# Install dependencies and create virtual environment
 uv sync
-
-# Activate environment
-source .venv/bin/activate
-
-# Run the CLI
-code-review review <path-or-github-url>
-
-# Format code with ruff
-ruff format src/
-
-# Lint code
-ruff check src/
-
-# Run tests with coverage
-pytest --cov=src/code_review_agent
+code-review show-config
+code-review review ./my_project --output reports/review.md
 ```
 
-## Coding Style & Naming Conventions
-
-- **Indentation**: 4 spaces, no tabs
-- **Line length**: Maximum 88 characters
-- **Import ordering**: Standard library → third-party → local
-- **Type hints**: Required for all function signatures
-- **Docstrings**: Google-style docstrings for public functions
-
-**Naming patterns**:
-- Modules: `snake_case` (e.g., `code_intel.py`)
-- Classes: `CamelCase` (e.g., `CodeReviewAgent`)
-- Functions/variables: `snake_case` (e.g., `load_config`)
-- Constants: `UPPER_SNAKE_CASE`
-
-**Linting**: Run `ruff check` before committing. Configure in `pyproject.toml`.
-
-## Testing Guidelines
-
-- **Framework**: pytest with pytest-cov for coverage
-- **Test location**: Place tests adjacent to source files
-- **Test naming**: Prefix with `test_` (e.g., `test_load_config`)
-- **Coverage target**: Maintain >80% coverage on new code
+## Running Tests
 
 ```bash
-# Run all tests
-pytest
-
-# Run with coverage report
-pytest --cov=src/code_review_agent --cov-report=term-missing
+python -m pytest tests/ -v
 ```
 
-## Commit & Pull Request Guidelines
+The test suite covers config loading, GitHub URL parsing, and the pure-Python tool helpers. Tests that require optional third-party detectors are skipped automatically when those packages are absent.
 
-**Commit messages**:
-- Use imperative tense: "Add CLI entry point" not "Added CLI entry point"
-- Keep subject line under 50 characters
-- Reference related issues when applicable
+## Supported Command Surface
 
-**Pull requests**:
-- Include description of changes and motivation
-- Link to relevant issues or feature requests
-- Ensure all tests pass before submitting
-- Update documentation for user-facing changes
+Use only real CLI commands:
+- `code-review review <path-or-github-url>`
+- `code-review ask "<question>"`
+- `code-review analyze-file <file.py>`
+- `code-review interactive <path-or-github-url>`
+- `code-review run-tool ml-smells <path>`
+- `code-review run-tool python-smells <path> --type all`
+- `code-review run-tool classify-td --text "TODO: ..."`
+- `code-review run-tool code-intel <path>`
+- `code-review run-tool list-files <path>`
+- `code-review run-tool read-file <file.py>`
+- `code-review show-config`
+- `code-review list-tools`
+- `code-review ollama-models`
 
-## Security & Configuration
+Provider/model overrides:
+- `--provider ollama|anthropic`
+- `--model <name>`
 
-**Environment variables**:
-- `ANTHROPIC_API_KEY`: Required when using Anthropic Claude backend
-- `CODE_REVIEW_CONFIG`: Optional path to alternate config file
+## Output Expectations
 
-**Configuration**:
-- All settings in `config.yaml` (Ollama, Anthropic, GitHub, tool thresholds)
-- Run `code-review show-config` to inspect resolved configuration
-- Never commit API keys; use environment variables instead
+Agent outputs should:
+- prioritize critical issues first
+- include concrete location references
+- provide an actionable remediation plan
+- state confidence limits when uncertain
+
+## Safety Rules
+
+- Never expose secrets or API keys.
+- Do not run destructive git commands unless explicitly requested.
+- Do not revert unrelated local changes.
+- Keep workflow deterministic and reproducible.
