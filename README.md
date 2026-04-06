@@ -265,15 +265,32 @@ python -m pytest tests/ --cov=src/code_review_agent --cov-report=term-missing
 
 The test suite lives in `tests/` and covers:
 
-- **`test_config.py`** — config loading from YAML, defaults, singleton (`get_config`/`reset_config`), threshold extraction
-- **`test_github_utils.py`** — `is_github_url`, `parse_github_url` (all URL formats), `cleanup_repo` behaviour
-- **`test_tools.py`** — internal helpers (`_rel`, `_enrich_column`, `_python_files`), `read_file`, `list_python_files`; optional-dependency tests for `detect_ml_smells` and `classify_technical_debt` are skipped gracefully when those packages are not installed
+| File | What it tests |
+|---|---|
+| `test_config.py` | Config loading from YAML, defaults, singleton (`get_config`/`reset_config`), threshold extraction |
+| `test_github_utils.py` | `is_github_url`, `parse_github_url` (HTTPS + SSH + tree URLs), `cleanup_repo` |
+| `test_tools.py` | Internal helpers (`_rel`, `_enrich_column`, `_python_files`), `read_file`, `list_python_files`, optional-dep tests for `detect_ml_smells` and `classify_technical_debt` |
 
-Run the full suite with:
+Tests that require the optional third-party detector packages (`ml_code_smell_detector`, `code_quality_analyzer`, `tdsuite`) are skipped gracefully when those packages are absent, so the suite stays green on a minimal environment.
+
+Run the full suite:
 
 ```bash
 python -m pytest tests/ -v
 ```
+
+Current results (all deps installed): **52 passed** in ~1.5 s.
+
+Coverage summary (unit-testable modules):
+
+| Module | Coverage |
+|---|---|
+| `config.py` | 93% |
+| `github_utils.py` | 59% |
+| `tools.py` | 46% |
+| `__init__.py` / `prompts.py` | 100% |
+
+The remaining gaps (`cli.py`, `agent.py`, `reporter.py`, `code_intel.py`) require a live LLM backend and are covered by integration/manual testing.
 
 ## Report Structure
 

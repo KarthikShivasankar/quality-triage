@@ -36,3 +36,14 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["src/code_review_agent"]
+omit = ["*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
