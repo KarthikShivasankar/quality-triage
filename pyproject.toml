@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "code-review-agent"
+version = "0.1.0"
+description = "AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "anthropic>=0.40.0",
+    "openai>=1.0.0",
+    "ml-code-smell-detector",
+    "tdsuite",
+    "code-quality-analyzer",
+    "click>=8.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+code-review = "code_review_agent.cli:main"
+
+[tool.uv.sources]
+ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", branch = "dev" }
+tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", branch = "dev" }
+code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", branch = "dev" }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/code_review_agent"]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
