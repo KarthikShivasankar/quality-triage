@@ -9,7 +9,7 @@
 provider: ollama
 
 ollama:
-  model: qwen2.5-coder:7b        # supports function calling; try llama3.1 or mistral-nemo
+  model: gemma4:latest            # supports function calling; alternatives: qwen3.5:4b, qwen3-coder-next
   base_url: http://localhost:11434/v1
   api_key: ollama
   max_tokens: 8192
@@ -50,9 +50,10 @@ tools:
     - .ruff_cache
   read_file_max_lines: 500
   td_classifier:
-    model_path: KarthikShivasankar/td-classifier
+    model_path: karths/binary_classification_train_TD
     device: cpu                  # cpu | cuda | mps
     batch_size: 32
+    backend: onnx                # onnx (default, no PyTorch) | torch
 
 # ---------------------------------------------------------------------------
 # Code intelligence (pure-Python AST analysis)

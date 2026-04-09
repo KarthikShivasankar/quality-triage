@@ -24,7 +24,7 @@ import yaml
 
 @dataclass
 class OllamaConfig:
-    model: str = "qwen2.5-coder:7b"
+    model: str = "gemma4:latest"
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     max_tokens: int = 8192
@@ -48,9 +48,10 @@ class GithubConfig:
 
 @dataclass
 class TDClassifierConfig:
-    model_path: str = "KarthikShivasankar/td-classifier"
+    model_path: str = "karths/binary_classification_train_TD"
     device: str = "cpu"
     batch_size: int = 32
+    backend: str = "onnx"  # "onnx" (default, no PyTorch needed) | "torch"
 
 
 @dataclass
