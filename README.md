@@ -2,6 +2,23 @@
 
 An agentic code review tool that combines ML-based smell detection, AST analysis, and LLM synthesis to produce structured, actionable code quality reports with exact `file:line:col` locations.
 
+## Run with Claude Code
+
+If you are using Claude Code (or any AI coding agent), start here:
+
+- Canonical agent contract: [`skills.md`](skills.md)
+- Claude-specific playbook: [`docs/claude-code.md`](docs/claude-code.md)
+- Cross-agent portability notes: [`docs/agent-interop.md`](docs/agent-interop.md)
+- Reusable command/prompt snippets: [`scripts/agent_review_examples.md`](scripts/agent_review_examples.md)
+
+Minimal bootstrap:
+
+```bash
+uv sync
+code-review show-config
+code-review review ./my_project --output reports/review.md
+```
+
 ## Overview
 
 Quality Triage runs a multi-step agentic loop to review Python codebases:
@@ -210,6 +227,10 @@ quality-triage/
 │   ├── prompts.py           # LLM system prompt
 │   ├── reporter.py          # Report generation utilities
 │   └── tools.py             # Tool implementations + OpenAI/Anthropic schemas
+├── tests/
+│   ├── test_config.py       # Config loading, defaults, singleton, thresholds
+│   ├── test_github_utils.py # URL detection, parsing, clone cleanup
+│   └── test_tools.py        # read_file, list_python_files, internal helpers
 ├── config.yaml              # Application configuration
 ├── pyproject.toml           # Project metadata and dependencies
 └── uv.lock                  # Locked dependency versions
@@ -227,8 +248,11 @@ ruff format src/
 # Lint
 ruff check src/
 
+# Run tests
+python -m pytest tests/ -v
+
 # Run tests with coverage
-pytest --cov=src/code_review_agent --cov-report=term-missing
+python -m pytest tests/ --cov=src/code_review_agent --cov-report=term-missing
 ```
 
 **Code style:**
@@ -236,6 +260,20 @@ pytest --cov=src/code_review_agent --cov-report=term-missing
 - Type hints required for all function signatures
 - Google-style docstrings for public functions
 - Import order: standard library → third-party → local
+
+## Testing
+
+The test suite lives in `tests/` and covers:
+
+- **`test_config.py`** — config loading from YAML, defaults, singleton (`get_config`/`reset_config`), threshold extraction
+- **`test_github_utils.py`** — `is_github_url`, `parse_github_url` (all URL formats), `cleanup_repo` behaviour
+- **`test_tools.py`** — internal helpers (`_rel`, `_enrich_column`, `_python_files`), `read_file`, `list_python_files`; optional-dependency tests for `detect_ml_smells` and `classify_technical_debt` are skipped gracefully when those packages are not installed
+
+Run the full suite with:
+
+```bash
+python -m pytest tests/ -v
+```
 
 ## Report Structure
 
