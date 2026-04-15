@@ -17,6 +17,9 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     "pyyaml>=6.0",
+    "onnxruntime>=1.16.0",
+    "torch>=2.0.0",
+    "onnxscript>=0.1.0",
 ]
 
 [project.scripts]
@@ -24,7 +27,7 @@ code-review = "code_review_agent.cli:main"
 
 [tool.uv.sources]
 ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", branch = "dev" }
-tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", branch = "dev" }
+tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", branch = "main" }
 code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", branch = "dev" }
 
 [tool.hatch.build.targets.wheel]

@@ -88,7 +88,7 @@ All settings live in `config.yaml`. Run `code-review show-config` to inspect the
 provider: ollama
 
 ollama:
-  model: qwen2.5-coder:7b      # any Ollama model with function calling
+  model: gemma4:latest          # any Ollama model with function calling; alternatives: qwen3.5:4b, qwen3-coder-next
   base_url: http://localhost:11434/v1
   max_tokens: 8192
   max_iterations: 25
@@ -228,9 +228,11 @@ quality-triage/
 │   ├── reporter.py          # Report generation utilities
 │   └── tools.py             # Tool implementations + OpenAI/Anthropic schemas
 ├── tests/
-│   ├── test_config.py       # Config loading, defaults, singleton, thresholds
-│   ├── test_github_utils.py # URL detection, parsing, clone cleanup
-│   └── test_tools.py        # read_file, list_python_files, internal helpers
+│   ├── test_config.py          # Config loading, defaults, singleton, thresholds
+│   ├── test_github_utils.py    # URL detection, parsing, clone cleanup
+│   ├── test_tools.py           # read_file, list_python_files, internal helpers
+│   ├── test_ollama_backend.py  # Comprehensive Ollama backend integration tests (79 tests)
+│   └── gradio_report.py        # Interactive Gradio test report dashboard
 ├── config.yaml              # Application configuration
 ├── pyproject.toml           # Project metadata and dependencies
 └── uv.lock                  # Locked dependency versions
@@ -265,21 +267,66 @@ python -m pytest tests/ --cov=src/code_review_agent --cov-report=term-missing
 
 The test suite lives in `tests/` and covers:
 
-| File | What it tests |
-|---|---|
-| `test_config.py` | Config loading from YAML, defaults, singleton (`get_config`/`reset_config`), threshold extraction |
-| `test_github_utils.py` | `is_github_url`, `parse_github_url` (HTTPS + SSH + tree URLs), `cleanup_repo` |
-| `test_tools.py` | Internal helpers (`_rel`, `_enrich_column`, `_python_files`), `read_file`, `list_python_files`, optional-dep tests for `detect_ml_smells` and `classify_technical_debt` |
+| File | Tests | What it covers |
+|---|---|---|
+| `test_config.py` | 12 | Config loading from YAML, defaults, singleton (`get_config`/`reset_config`), threshold extraction |
+| `test_github_utils.py` | 11 | `is_github_url`, `parse_github_url` (HTTPS + SSH + tree URLs), `cleanup_repo` |
+| `test_tools.py` | 29 | Internal helpers (`_rel`, `_enrich_column`, `_python_files`), `read_file`, `list_python_files` |
+| `test_ollama_backend.py` | 79 | Full Ollama backend integration — see below |
 
-Tests that require the optional third-party detector packages (`ml_code_smell_detector`, `code_quality_analyzer`, `tdsuite`) are skipped gracefully when those packages are absent, so the suite stays green on a minimal environment.
+Tests that require the optional third-party detector packages (`ml_code_smell_detector`, `code_quality_analyzer`, `tdsuite`) are skipped gracefully when those packages are absent.
+
+### Ollama Backend Test Suite (`test_ollama_backend.py`)
+
+79 comprehensive tests covering all layers of the stack:
+
+| Test Class | Tests | What it validates |
+|---|---|---|
+| `TestOllamaConfig` | 7 | Default model, base URL, token limits, timeout from config |
+| `TestCodeReviewAgentFactory` | 3 | Provider routing (ollama / anthropic), config override |
+| `TestOllamaAgentLive` | 6 | Live connectivity, streaming, response type, `review()`, iteration limits |
+| `TestListPythonFilesTool` | 7 | File listing, ignore dirs, edge cases (missing dir, empty dir) |
+| `TestReadFileTool` | 7 | File reading, line numbers, truncation, error handling |
+| `TestCodeIntelligenceTool` | 7 | AST analysis, symbol lookup, import graph, find usages |
+| `TestDetectMlSmellsTool` | 5 | ML anti-pattern detection across all detector classes |
+| `TestDetectPythonSmellsTool` | 6 | Code / architectural / structural smell detection |
+| `TestClassifyTechDebtTool` | 5 | ONNX inference, multi-text batch, empty input, text truncation |
+| `TestExecuteTool` | 6 | Dispatcher happy path, unknown tool, bad args, JSON serialisation |
+| `TestToolSchemas` | 4 | All 6 tools defined, required fields, registry consistency |
+| `TestOllamaAgentToolCalling` | 5 | Full agentic loop: LLM calls tools → result flows back |
+| `TestOllamaConnectivity` | 3 | REST endpoint reachability, model list, OpenAI-compat `/v1/models` |
+| `TestInternalHelpers` | 8 | `_rel`, `_enrich_column`, `_python_files` edge cases |
 
 Run the full suite:
 
 ```bash
-python -m pytest tests/ -v
+# All tests
+uv run pytest tests/ -v
+
+# Ollama backend only
+uv run pytest tests/test_ollama_backend.py -v -s
+
+# Filter to a specific class
+uv run pytest tests/test_ollama_backend.py -k "Config or Schema" -v
 ```
 
-Current results (all deps installed): **52 passed** in ~1.5 s.
+Current results (all deps + live Ollama): **131 passed** in ~4 min (dominated by LLM inference).
+
+### Gradio Test Dashboard
+
+An interactive report UI that runs the test suite and visualises results:
+
+```bash
+uv run python tests/gradio_report.py
+# Open http://127.0.0.1:7860 in your browser
+```
+
+Features:
+- Summary card: total / passed / failed / skipped / pass rate
+- Per-test table with badge, class, test name, duration, and error excerpts
+- Raw pytest log viewer
+- Downloadable timestamped JSON report (saved to `reports/`)
+- Ollama status panel (online/offline + available models)
 
 Coverage summary (unit-testable modules):
 
@@ -287,10 +334,10 @@ Coverage summary (unit-testable modules):
 |---|---|
 | `config.py` | 93% |
 | `github_utils.py` | 59% |
-| `tools.py` | 46% |
+| `tools.py` | 68% |
+| `agent.py` | 72% |
+| `code_intel.py` | 61% |
 | `__init__.py` / `prompts.py` | 100% |
-
-The remaining gaps (`cli.py`, `agent.py`, `reporter.py`, `code_intel.py`) require a live LLM backend and are covered by integration/manual testing.
 
 ## Report Structure
 

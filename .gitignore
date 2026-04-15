@@ -53,3 +53,4 @@ secrets.yaml
 
 # uv
 .python-version
+.codex

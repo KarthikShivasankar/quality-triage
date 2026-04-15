@@ -249,6 +249,133 @@ def _extract_smell_list(detector: Any, attr: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# tdsuite loader helpers
+# tdsuite.utils.__init__ eagerly imports data_utils → datasets (optional dep).
+# We load onnx_inference.py directly from disk to bypass the broken __init__.
+# ---------------------------------------------------------------------------
+
+def _load_tdsuite_onnx_cls():
+    """Return OnnxInferenceEngine class, bypassing tdsuite.utils.__init__."""
+    import importlib.util
+    import importlib
+    spec = importlib.util.find_spec("tdsuite")
+    if spec is None:
+        raise ImportError("tdsuite is not installed")
+    import pathlib
+    tdsuite_root = pathlib.Path(spec.origin).parent
+    onnx_file = tdsuite_root / "utils" / "onnx_inference.py"
+    if not onnx_file.exists():
+        raise ImportError(f"tdsuite ONNX module not found at {onnx_file}")
+    mod_spec = importlib.util.spec_from_file_location("_tdsuite_onnx_inference", onnx_file)
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    return mod.OnnxInferenceEngine
+
+
+def _load_tdsuite_torch_cls():
+    """Return InferenceEngine (PyTorch) class."""
+    import importlib.util
+    import importlib
+    spec = importlib.util.find_spec("tdsuite")
+    if spec is None:
+        raise ImportError("tdsuite is not installed")
+    import pathlib
+    tdsuite_root = pathlib.Path(spec.origin).parent
+    torch_file = tdsuite_root / "utils" / "inference.py"
+    if not torch_file.exists():
+        raise ImportError(f"tdsuite torch inference module not found at {torch_file}")
+    mod_spec = importlib.util.spec_from_file_location("_tdsuite_torch_inference", torch_file)
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    return mod.InferenceEngine
+
+
+def _export_hf_model_to_onnx(model_path: str) -> str:
+    """Export a HuggingFace model to ONNX; return path to the exported model.onnx.
+
+    Used when the model's HF-hosted model.onnx has broken external data references.
+    Caches the exported ONNX under ~/.cache/td_onnx_export/.
+    """
+    import torch
+    from pathlib import Path
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    cache_dir = Path.home() / ".cache" / "td_onnx_export" / model_path.replace("/", "__")
+    onnx_path = cache_dir / "model.onnx"
+
+    if not onnx_path.exists():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model.eval()
+
+        dummy = tokenizer(
+            "test input", return_tensors="pt",
+            padding="max_length", max_length=512, truncation=True,
+        )
+        input_names = list(dummy.keys())
+
+        torch.onnx.export(
+            model,
+            tuple(dummy[k] for k in input_names),
+            str(onnx_path),
+            input_names=input_names,
+            output_names=["logits"],
+            dynamic_axes={k: {0: "batch", 1: "seq"} for k in input_names},
+            opset_version=14,
+        )
+        tokenizer.save_pretrained(str(cache_dir))
+
+    return str(cache_dir)
+
+
+def _load_td_onnx_engine(model_path: str, device: str):
+    """Build and return an OnnxInferenceEngine, or a dict error.
+
+    First tries tdsuite's OnnxInferenceEngine.from_pretrained (works when the
+    HF repo ships a self-contained model.onnx).  If that fails because the
+    hosted model.onnx uses external weight files that weren't uploaded to HF,
+    we export the model to ONNX from its safetensors weights and try again.
+    """
+    try:
+        OnnxInferenceEngine = _load_tdsuite_onnx_cls()
+    except ImportError as e:
+        return {"error": f"tdsuite ONNX inference not available: {e}"}
+
+    try:
+        return OnnxInferenceEngine.from_pretrained(model_path, device=device)
+    except Exception as first_exc:
+        # Detect broken external-data ONNX and fall back to local export
+        if "cannot get file size" in str(first_exc) or "onnx.data" in str(first_exc):
+            try:
+                exported_dir = _export_hf_model_to_onnx(model_path)
+                onnx_file = str(Path(exported_dir) / "model.onnx")
+                return OnnxInferenceEngine(
+                    onnx_path=onnx_file,
+                    tokenizer_path=exported_dir,
+                    device=device,
+                )
+            except Exception as export_exc:
+                return {
+                    "error": f"ONNX export failed: {export_exc}",
+                    "traceback": traceback.format_exc(),
+                }
+        return {"error": str(first_exc), "traceback": traceback.format_exc()}
+
+
+def _load_td_torch_engine(model_path: str, device: str):
+    """Build and return a PyTorch InferenceEngine, or a dict error."""
+    try:
+        InferenceEngine = _load_tdsuite_torch_cls()
+    except ImportError as e:
+        return {"error": f"tdsuite PyTorch inference not available (install tdsuite[gpu]): {e}"}
+    try:
+        return InferenceEngine(model_path=model_path, device=device)
+    except Exception as exc:
+        return {"error": str(exc), "traceback": traceback.format_exc()}
+
+
+# ---------------------------------------------------------------------------
 # Tool 3: classify_technical_debt
 # ---------------------------------------------------------------------------
 
@@ -256,22 +383,31 @@ def classify_technical_debt(
     texts: list[str],
     model_path: str | None = None,
     device: str | None = None,
+    backend: str | None = None,
 ) -> dict[str, Any]:
-    """Classify text snippets into 18 technical debt categories using tdsuite."""
+    """Classify text snippets into technical debt categories using tdsuite.
+
+    backend: "onnx" (default, CPU-only, no PyTorch required) | "torch"
+    """
     if not texts:
         return {"error": "No texts provided"}
 
     cfg = _get_cfg()
     model_path = model_path or cfg.tools.td_classifier.model_path
     device = device or cfg.tools.td_classifier.device
+    backend = backend or cfg.tools.td_classifier.backend
+
+    if backend == "torch":
+        engine = _load_td_torch_engine(model_path, device)
+        if isinstance(engine, dict):
+            return engine
+    else:
+        # ONNX backend (default) — downloads model.onnx from HF Hub on first run
+        engine = _load_td_onnx_engine(model_path, device)
+        if isinstance(engine, dict):
+            return engine
 
     try:
-        from tdsuite.inference import InferenceEngine
-    except ImportError as e:
-        return {"error": f"tdsuite not available: {e}"}
-
-    try:
-        engine = InferenceEngine(model_path=model_path, device=device)
         predictions = []
         for text in texts:
             try:
@@ -285,6 +421,7 @@ def classify_technical_debt(
                 predictions.append({"text": text[:200], "error": str(exc)})
         return {
             "tool": "td_classify",
+            "backend": backend,
             "model": model_path,
             "predictions": predictions,
         }
@@ -528,6 +665,7 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                     },
                     "model_path": {"type": "string", "description": "HuggingFace model ID or local path"},
                     "device": {"type": "string", "enum": ["cpu", "cuda", "mps"]},
+                    "backend": {"type": "string", "enum": ["onnx", "torch"], "description": "Inference backend: 'onnx' (default, CPU, no PyTorch) or 'torch'"},
                 },
                 "required": ["texts"],
             },
