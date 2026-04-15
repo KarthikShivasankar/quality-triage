@@ -1,0 +1,55 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# Linting
+.ruff_cache/
+.mypy_cache/
+
+# Reports (generated output)
+reports/
+
+# Cloned repos (temp)
+/tmp/code_review_repos/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — never commit these
+.env
+*.env
+secrets.yaml
+
+# uv
+.python-version

@@ -1,0 +1,222 @@
+# =============================================================================
+# Quality Triage — Central Configuration
+# Edit this file to customise every aspect of the code review agent.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Provider (Ollama is default — no API key required)
+# ---------------------------------------------------------------------------
+provider: ollama
+
+ollama:
+  model: qwen2.5-coder:7b        # supports function calling; try llama3.1 or mistral-nemo
+  base_url: http://localhost:11434/v1
+  api_key: ollama
+  max_tokens: 8192
+  max_iterations: 25
+  timeout: 120                   # per-request timeout in seconds
+
+anthropic:
+  model: claude-opus-4-6
+  max_tokens: 8192
+  max_iterations: 20
+  # api_key: set via ANTHROPIC_API_KEY environment variable
+
+# ---------------------------------------------------------------------------
+# GitHub integration
+# ---------------------------------------------------------------------------
+github:
+  clone_dir: /tmp/code_review_repos
+  depth: 1                       # shallow clone (faster)
+  timeout: 120                   # clone timeout in seconds
+  # token: set via GITHUB_TOKEN env var for private repos
+
+# ---------------------------------------------------------------------------
+# Tool execution defaults
+# ---------------------------------------------------------------------------
+tools:
+  ignore_dirs:
+    - .git
+    - __pycache__
+    - venv
+    - .venv
+    - node_modules
+    - dist
+    - build
+    - .tox
+    - .eggs
+    - htmlcov
+    - .mypy_cache
+    - .ruff_cache
+  read_file_max_lines: 500
+  td_classifier:
+    model_path: KarthikShivasankar/td-classifier
+    device: cpu                  # cpu | cuda | mps
+    batch_size: 32
+
+# ---------------------------------------------------------------------------
+# Code intelligence (pure-Python AST analysis)
+# ---------------------------------------------------------------------------
+code_intel:
+  max_file_size_kb: 500
+  include_private_symbols: false  # include _underscore symbols
+  metrics_enabled: true
+  top_complexity_n: 15            # report the N most complex functions
+
+# ---------------------------------------------------------------------------
+# Report settings
+# ---------------------------------------------------------------------------
+report:
+  output_dir: ./reports
+  default_format: markdown        # markdown | json | both
+  include_code_snippets: true
+  max_snippet_lines: 10
+  min_severity: low               # critical | high | medium | low | info
+  open_after_write: false
+
+# ---------------------------------------------------------------------------
+# Thresholds passed to code_quality_analyzer detectors
+# ---------------------------------------------------------------------------
+code_smells:
+  LONG_METHOD_LINES:
+    value: 45
+    explanation: "Methods longer than this many lines may be too complex."
+  LARGE_CLASS_METHODS:
+    value: 15
+    explanation: "Classes with more than this many methods have too many responsibilities."
+  PRIMITIVE_OBSESSION_COUNT:
+    value: 4
+    explanation: "Functions with more than this many primitive parameters."
+  LONG_PARAMETER_LIST:
+    value: 5
+    explanation: "Functions with more than this many parameters."
+  COMPLEX_CONDITIONAL:
+    value: 3
+    explanation: "If-else chains longer than this indicate a switch smell."
+  DIVERGENT_CHANGE_PREFIXES:
+    value: 4
+    explanation: "Distinct method name prefix count threshold."
+  SHOTGUN_SURGERY_CALLS:
+    value: 5
+    explanation: "Methods called in more than this many places."
+  EXCESSIVE_COMMENTS_RATIO:
+    value: 0.3
+    explanation: "Ratio of comment lines to total lines."
+  LAZY_CLASS_METHODS:
+    value: 4
+    explanation: "Classes with this few methods or fewer are lazy."
+  FEATURE_ENVY_CALLS:
+    value: 3
+    explanation: "Calls to another object's methods threshold."
+  INAPPROPRIATE_INTIMACY_SHARED:
+    value: 3
+    explanation: "Shared fields/methods between classes threshold."
+  MESSAGE_CHAIN_LENGTH:
+    value: 3
+    explanation: "Method call chain length threshold."
+  DATA_CLUMPS_THRESHOLD:
+    value: 6
+    explanation: "Parameter groups appearing together threshold."
+  TEMPORARY_FIELD_THRESHOLD:
+    value: 3
+    explanation: "Unused-in-most-methods fields threshold."
+  ALTERNATIVE_CLASSES_THRESHOLD:
+    value: 3
+    explanation: "Classes with identical method sets threshold."
+  DUPLICATE_CODE_THRESHOLD:
+    value: 15
+    explanation: "Identical code blocks threshold."
+  DEAD_CODE_THRESHOLD:
+    value: 3
+    explanation: "Defined-but-never-called functions threshold."
+  SPECULATIVE_GENERALITY_THRESHOLD:
+    value: 4
+    explanation: "Abstract classes with no concrete impls threshold."
+  UNUSED_PARAMETERS_THRESHOLD:
+    value: 6
+    explanation: "Unused method parameters threshold."
+  MIDDLE_MAN_RATIO:
+    value: 0.5
+    explanation: "Ratio of delegating methods threshold."
+  DUPLICATE_CODE_MIN_LINES:
+    value: 5
+    explanation: "Minimum lines for duplicate code detection."
+
+architectural_smells:
+  GOD_OBJECT_FUNCTIONS:
+    value: 20
+    explanation: "Module function count for god-object detection."
+  UNSTABLE_DEPENDENCY_THRESHOLD:
+    value: 0.8
+    explanation: "Instability ratio threshold."
+  HUB_LIKE_DEPENDENCY_RATIO:
+    value: 0.3
+    explanation: "Hub-like module connection ratio."
+  REDUNDANT_ABSTRACTION_SIMILARITY:
+    value: 0.7
+    explanation: "Function similarity threshold for redundant abstractions."
+  IMPROPER_API_USAGE_RATIO:
+    value: 0.7
+    explanation: "Repeated API calls ratio threshold."
+  CYCLIC_DEPENDENCY_MAX_LENGTH:
+    value: 3
+    explanation: "Max cycle length before flagging."
+
+structural_smells:
+  NOM_THRESHOLD:
+    value: 10
+    explanation: "Number of Methods per class."
+  WMPC1_THRESHOLD:
+    value: 20
+    explanation: "Weighted Methods per Class (complexity)."
+  WMPC2_THRESHOLD:
+    value: 20
+    explanation: "Weighted Methods per Class (params)."
+  SIZE2_THRESHOLD:
+    value: 15
+    explanation: "Class member count."
+  WAC_THRESHOLD:
+    value: 10
+    explanation: "Fields per class."
+  LCOM_THRESHOLD:
+    value: 10
+    explanation: "Lack of Cohesion in Methods."
+  RFC_THRESHOLD:
+    value: 20
+    explanation: "Response for Class."
+  NOCC_THRESHOLD:
+    value: 10
+    explanation: "Classes per module."
+  DIT_THRESHOLD:
+    value: 3
+    explanation: "Depth of Inheritance Tree."
+  LOC_THRESHOLD:
+    value: 150
+    explanation: "Lines of code per module."
+  MPC_THRESHOLD:
+    value: 25
+    explanation: "Message Passing Coupling."
+  CBO_THRESHOLD:
+    value: 5
+    explanation: "Coupling Between Objects."
+  NOC_THRESHOLD:
+    value: 7
+    explanation: "Number of classes in project."
+  CYCLOMATIC_COMPLEXITY_THRESHOLD:
+    value: 10
+    explanation: "Cyclomatic complexity per method."
+  MAX_FANOUT:
+    value: 15
+    explanation: "Outgoing dependencies per module."
+  MAX_FANIN:
+    value: 15
+    explanation: "Incoming dependencies per module."
+  MAX_FILE_LENGTH:
+    value: 250
+    explanation: "File line count."
+  MAX_BRANCHES:
+    value: 10
+    explanation: "Branch count per method."
+  MAX_NESTING_DEPTH:
+    value: 4
+    explanation: "Code nesting depth."
