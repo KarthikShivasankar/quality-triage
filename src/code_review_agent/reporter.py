@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -524,7 +524,7 @@ def build_report(
 
     return ReportData(
         target=target,
-        analyzed_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        analyzed_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         provider=provider,
         model=model,
         files_analyzed=files_analyzed,

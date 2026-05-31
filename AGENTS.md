@@ -39,7 +39,7 @@ uv build                          # sdist + wheel
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint+format, the test suite on Python
-3.10/3.11/3.12, and a build+`twine check` job. Releases publish to PyPI via
+3.12/3.13, and a build+`twine check` job. Releases publish to PyPI via
 Trusted Publishing (OIDC) on `v*` tags (`.github/workflows/release.yml`); bump
 `version` in both `pyproject.toml` and `__init__.py` before tagging. See the
 README's *Maintaining the package* section for the full release runbook.

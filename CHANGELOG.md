@@ -5,6 +5,17 @@ All notable changes to **quality-triage** are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-05-31
+
+### Changed
+
+- **Raised the supported Python floor to 3.12** (`requires-python = ">=3.12"`).
+  The bundled detector engines (git `main`) use PEP 701 multi-line f-strings
+  (3.12+), and the pinned `onnxruntime` ships no wheels for 3.10, so 3.10/3.11
+  could never run the dev/CI dependency set. CI now tests Python 3.12 and 3.13.
+- Bumped GitHub Actions to their Node 24 runtimes (`checkout@v5`,
+  `setup-uv@v7`, `upload-artifact@v7`, `download-artifact@v8`).
+
 ## [0.3.0] - 2026-05-31
 
 ### Added

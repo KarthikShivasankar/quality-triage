@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "quality-triage"
-version = "0.3.0"
+version = "0.3.1"
 description = "AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 authors = [{ name = "Karthik Shivasankar" }]
 keywords = [
     "code-review",
@@ -27,9 +27,8 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Quality Assurance",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -53,8 +52,7 @@ Issues = "https://github.com/KarthikShivasankar/quality-triage/issues"
 Changelog = "https://github.com/KarthikShivasankar/quality-triage/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
-# The MCP SDK requires Python >= 3.10 (matches the project's requires-python).
-mcp = ["mcp>=1.0; python_version >= '3.10'"]
+mcp = ["mcp>=1.0"]
 # FastAPI + HTML UI. python-multipart is required for HTML form parsing.
 web = [
     "fastapi>=0.110",
@@ -84,7 +82,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py312"
 src = ["src"]
 
 [tool.ruff.lint]
@@ -92,8 +90,9 @@ src = ["src"]
 # C4: comprehensions, SIM: simplify. Keep this green in CI.
 select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM"]
 ignore = [
-    "E501",  # line length is enforced by the formatter, not the linter
-    "B008",  # function calls in argument defaults (Click/Typer idiom)
+    "E501",   # line length is enforced by the formatter, not the linter
+    "B008",   # function calls in argument defaults (Click/Typer idiom)
+    "UP042",  # keep `str, Enum` (StrEnum would change str() semantics)
 ]
 
 [tool.ruff.lint.per-file-ignores]

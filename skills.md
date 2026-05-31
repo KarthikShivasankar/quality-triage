@@ -25,7 +25,7 @@ A successful agent run should:
 ## 3) Environment Bootstrap
 
 Required:
-- Python 3.10+
+- Python 3.12+
 - `uv`
 
 Bootstrap commands:

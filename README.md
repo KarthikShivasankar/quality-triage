@@ -53,7 +53,7 @@ per-category** model on the HuggingFace Hub (general/code/design/security/…).
 
 ## Installation
 
-Requires Python ≥ 3.10.
+Requires Python ≥ 3.12.
 
 > The distribution is published as **`quality-triage`** on PyPI; the installed
 > CLI command is **`code-review`** and the import package is `code_review_agent`.
@@ -518,7 +518,7 @@ otherwise.
 | Job     | What it does                                                            |
 | ------- | ----------------------------------------------------------------------- |
 | `lint`  | `ruff check src/` + `ruff format --check src/`                          |
-| `test`  | full offline suite on Python **3.10, 3.11, 3.12**                       |
+| `test`  | full offline suite on Python **3.12, 3.13**                            |
 | `build` | `uv build` + `twine check dist/*`, uploads the sdist/wheel as artifacts |
 
 The suite needs no network, GPU, or API keys. The `build` job runs only after
