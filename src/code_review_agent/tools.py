@@ -454,7 +454,8 @@ def _extract_smell_list(detector: Any, attr: str) -> list[dict]:
                 return list(val.values())
     # Fallback: print_report to string
     try:
-        import io, contextlib
+        import contextlib
+        import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             detector.print_report()

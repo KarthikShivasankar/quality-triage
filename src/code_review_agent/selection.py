@@ -16,7 +16,7 @@ unit-test offline.
 
 from __future__ import annotations
 
-from code_review_agent.tools import TD_CATEGORY_MODELS, TD_PRIMARY_CATEGORIES
+from code_review_agent.tools import TD_CATEGORY_MODELS
 
 # Detector families the user can select. ``code``/``architectural``/``structural``
 # all map onto the single python-smell detector via its ``analysis_type``.

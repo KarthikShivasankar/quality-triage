@@ -48,13 +48,12 @@ cyclic dependencies, god objects, high cyclomatic complexity, deep inheritance.
 per-category** model on the HuggingFace Hub (general/code/design/security/…).
 - **AST code intelligence**: symbol lookup, find-usages, import graph, per-function metrics.
 - **GitHub or local**: auto-clones GitHub URLs (and cleans up), or reviews local paths.
-- **Universal MCP server** (`code-review-mcp`) exposing the six tools to any harness.
+- **Universal MCP server** (`code-review-mcp`) exposing the analysis tools to any harness.
 - Streams output live; saves reports with `--output`.
 
 ## Installation
 
-Requires Python ≥ 3.9 and `[uv](https://docs.astral.sh/uv/)`. The MCP extra
-requires Python ≥ 3.10.
+Requires Python ≥ 3.10 and `[uv](https://docs.astral.sh/uv/)`.
 
 ```bash
 git clone https://github.com/KarthikShivasankar/quality-triage.git
@@ -391,7 +390,9 @@ documented in each folder).
 
 ## Tools
 
-The agent (and MCP server) expose six analysis tools:
+The agent (and MCP server) expose the following analysis tools, grouped by family
+(the MCP server registers 10 tools in total — the technical-debt family below
+expands into several companion tools):
 
 - `**detect_ml_smells**` — wraps `ml_code_smell_detector`. Framework-specific
 (Pandas/NumPy/sklearn/PyTorch/TF), HuggingFace, and general ML smells. A fresh
@@ -466,9 +467,15 @@ quality-triage/
 ```bash
 uv sync --dev
 uv run ruff format src/
-uv run ruff check src/
+uv run ruff check src/       # gated by [tool.ruff] in pyproject.toml
 uv run python -m pytest tests/ -q
 ```
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs `ruff check src/` and the full offline test
+suite on every push and pull request to `main`, against Python 3.10 and 3.12
+(the project's supported range). The suite needs no network, GPU, or API keys.
 
 ## Testing
 

@@ -7,6 +7,7 @@ name = "code-review-agent"
 version = "0.2.0"
 description = "AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification"
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40.0",
@@ -22,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# The MCP SDK requires Python >= 3.10; gate it so the project still resolves on 3.9.
+# The MCP SDK requires Python >= 3.10 (matches the project's requires-python).
 mcp = ["mcp>=1.0; python_version >= '3.10'"]
 # FastAPI + HTML UI. python-multipart is required for HTML form parsing.
 web = [
@@ -50,6 +51,11 @@ dev = [
     "pytest-cov>=4.0",
     "ruff>=0.1.0",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

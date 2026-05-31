@@ -19,12 +19,16 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import click
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
+
+from code_review_agent.selection import ALL_FAMILIES
+
 
 def _force_utf8_streams() -> None:
     """Make stdout/stderr UTF-8 tolerant.
@@ -46,8 +50,6 @@ def _force_utf8_streams() -> None:
 _force_utf8_streams()
 
 console = Console()
-
-from code_review_agent.selection import ALL_FAMILIES
 
 PROVIDER_CHOICE = click.Choice(["ollama", "openai", "anthropic"])
 FAMILY_CHOICE = click.Choice(ALL_FAMILIES)
@@ -312,7 +314,7 @@ def _handle_review_fixes(text: str, project_root: str, mode: str, assume_yes: bo
         f"{counts.get('skipped', 0)} skipped, {counts.get('diffs', 0)} diff(s)."
     )
     if outcome.get("applied"):
-        console.print(f"[dim]Backups written next to each modified file (.bak).[/dim]")
+        console.print("[dim]Backups written next to each modified file (.bak).[/dim]")
     return {
         "fixes": [s.to_dict() for s in suggestions],
         "outcome": outcome,
@@ -488,7 +490,11 @@ def tool_classify_td(ctx, text, from_file, category, model_path, onnx_path, devi
 
     texts = list(text)
     if from_file:
-        texts += [l.strip() for l in Path(from_file).read_text().splitlines() if l.strip()]
+        texts += [
+            ln.strip()
+            for ln in Path(from_file).read_text(encoding="utf-8", errors="replace").splitlines()
+            if ln.strip()
+        ]
     if not texts:
         console.print("[red]Error:[/red] Provide --text or --from-file")
         sys.exit(1)
@@ -525,7 +531,11 @@ def tool_classify_td_all(ctx, text, from_file, categories, device, output):
 
     texts = list(text)
     if from_file:
-        texts += [l.strip() for l in Path(from_file).read_text().splitlines() if l.strip()]
+        texts += [
+            ln.strip()
+            for ln in Path(from_file).read_text(encoding="utf-8", errors="replace").splitlines()
+            if ln.strip()
+        ]
     if not texts:
         console.print("[red]Error:[/red] Provide --text or --from-file")
         sys.exit(1)
@@ -563,7 +573,11 @@ def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, wei
 
     texts = list(text)
     if from_file:
-        texts += [l.strip() for l in Path(from_file).read_text().splitlines() if l.strip()]
+        texts += [
+            ln.strip()
+            for ln in Path(from_file).read_text(encoding="utf-8", errors="replace").splitlines()
+            if ln.strip()
+        ]
     if not texts:
         console.print("[red]Error:[/red] Provide --text or --from-file")
         sys.exit(1)
@@ -797,7 +811,7 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
     """Interactive tool selector — choose which tools to run, then get AI synthesis."""
     cfg = _load_cfg(ctx.obj.get("config_path"))
 
-    from code_review_agent.github_utils import is_github_url, clone_repo, cleanup_repo
+    from code_review_agent.github_utils import is_github_url, clone_repo
     cloned = None
     if is_github_url(target):
         console.print(f"[cyan]Cloning:[/cyan] {target}")
@@ -827,8 +841,7 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
     selected = click.prompt("Select tools (comma-separated, e.g. 1,3,4 or a)", default="a")
 
     from code_review_agent.tools import (
-        list_python_files, analyze_code_intelligence,
-        detect_python_smells, detect_ml_smells, classify_technical_debt, execute_tool,
+        classify_technical_debt, execute_tool,
     )
 
     keys_to_run = list(tool_choices.keys()) if selected.strip().lower() == "a" \

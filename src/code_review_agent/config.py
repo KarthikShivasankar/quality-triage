@@ -177,7 +177,7 @@ def _find_config(explicit: str | None = None) -> tuple[dict, str]:
     ]
     for p in candidates:
         if p.exists():
-            with open(p) as f:
+            with open(p, encoding="utf-8") as f:
                 return yaml.safe_load(f) or {}, str(p)
     return {}, "defaults"
 

@@ -55,10 +55,12 @@ Use only real CLI commands:
 - `code-review run-tool read-file <file.py>`
 - `code-review show-config`
 - `code-review list-tools`
+- `code-review providers`
+- `code-review doctor`
 - `code-review ollama-models`
 
 Provider/model overrides:
-- `--provider ollama|anthropic`
+- `--provider ollama|openai|anthropic`
 - `--model <name>`
 
 ## Output Expectations

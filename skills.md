@@ -25,7 +25,7 @@ A successful agent run should:
 ## 3) Environment Bootstrap
 
 Required:
-- Python 3.9+
+- Python 3.10+
 - `uv`
 
 Bootstrap commands:
@@ -199,9 +199,11 @@ Use this mapping when porting workflows to other agent ecosystems.
 
 ### Generic MCP-compatible agents
 - Preferred: connect the bundled MCP server (`code-review-mcp`, install with
-  `uv sync --extra mcp`). It exposes the six analysis tools directly
+  `uv sync --extra mcp`). It exposes 10 analysis tools directly
   (`detect_ml_smells`, `detect_python_smells`, `classify_technical_debt`,
-  `analyze_code_intelligence`, `list_python_files`, `read_file`).
+  `classify_technical_debt_all`, `classify_technical_debt_ensemble`,
+  `classify_github_issues`, `list_td_categories`, `analyze_code_intelligence`,
+  `list_python_files`, `read_file`).
 
 ### Code-smell catalog notes
 - The agent supplements the installed `code_quality_analyzer` so the full
