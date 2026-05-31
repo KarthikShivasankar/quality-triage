@@ -118,12 +118,17 @@ def build_server():
         categories: list[str] | None = None,
         weights: list[float] | None = None,
         device: str | None = None,
+        backend: str | None = None,
     ) -> str:
-        """Classify snippets with a weighted ensemble of TD models."""
+        """Classify snippets with a weighted ensemble of TD models.
+
+        Runs on the native torch-free ONNX ensemble by default; pass
+        backend="torch" to force the PyTorch engine.
+        """
         return _result_text(
             _tools.classify_technical_debt_ensemble(
                 texts, model_names=model_names, categories=categories,
-                weights=weights, device=device,
+                weights=weights, device=device, backend=backend,
             )
         )
 

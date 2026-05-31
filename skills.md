@@ -116,7 +116,9 @@ design/documentation/test/defect/requirement/build/automation/people/process/
 infrastructure/architecture/service/security/performance/usability/
 maintainability/reliability/portability/compatibility). For a multi-label view
 across all categories use `classify-td-all`; for a weighted ensemble use
-`classify-td-ensemble`; to classify a repo's GitHub issues use `td-issues`.
+`classify-td-ensemble` (native torch-free ONNX ensemble by default; add
+`--backend torch` to force PyTorch); to classify a repo's GitHub issues use
+`td-issues`.
 
 ## 5) Agent Task Recipes
 

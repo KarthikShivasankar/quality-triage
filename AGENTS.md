@@ -26,7 +26,7 @@ code-review-web        # http://127.0.0.1:8000  (or: uv run python -m code_revie
 python -m pytest tests/ -v
 ```
 
-The test suite covers config loading, GitHub URL parsing, the pure-Python tool helpers, and per-name catalog smell coverage (`tests/test_smell_coverage.py`). Tests that require optional third-party detectors are skipped automatically when those packages are absent. Current result: **211 passed**.
+The test suite covers config loading, GitHub URL parsing, the pure-Python tool helpers, and per-name catalog smell coverage (`tests/test_smell_coverage.py`). Tests that require optional third-party detectors are skipped automatically when those packages are absent. Current result: **215 passed**.
 
 The agent supplements the installed `code_quality_analyzer` (without editing it) so the whole catalog is reachable: **Lazy Class / Dead Code / Data Class** are invoked explicitly (they are defined upstream but missing from the dispatch list), and **Switch Statements / Deep Inheritance Tree (DIT)** are re-detected by pure-AST helpers in `cqa_supplement.py` (the upstream branch counter and inheritance graph are buggy). Missing thresholds `LAZY_CLASS_LINES` (15) and `DATA_CLASS_METHODS` (5) are supplied by the agent. `Unused Parameters` and `Large Comment Blocks` fold into Speculative Generality and Excessive Comments upstream.
 

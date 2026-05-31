@@ -168,13 +168,25 @@ code-review run-tool classify-td --onnx-path ./model.onnx --text "..."
 # Multi-label sweep across every category model
 code-review run-tool classify-td-all --text "FIXME: flaky test, no seed set"
 
-# Weighted ensemble of category models
+# Weighted ensemble of category models (native torch-free ONNX engine by default)
 code-review run-tool classify-td-ensemble --text "TODO: hack" \
   --category security --category design --weight 0.6 --weight 0.4
+
+# Force the PyTorch ensemble backend instead of ONNX
+code-review run-tool classify-td-ensemble --text "TODO: hack" \
+  --category security --category design --backend torch
 
 # Classify a GitHub repo's issues for technical debt
 code-review run-tool td-issues pandas-dev/pandas --category defect --limit 30
 ```
+
+The ensemble runs on tdsuite's native `OnnxEnsembleInferenceEngine` by default —
+a torch-free weighted ONNX ensemble (CPU, or GPU with `onnxruntime-gpu`) that
+takes the normalised weighted mean of each model's softmax probabilities. Pass
+`--backend torch` to use the PyTorch `EnsembleInferenceEngine`; if neither engine
+is importable the agent transparently falls back to a per-model CPU ensemble. The
+chosen path is reported in the result's `backend` field
+(`onnx` / `torch` / `cpu-manual`).
 
 The 21 categories (verified against the live HuggingFace Hub) are: `general`,
 `code`, `design`, `documentation`, `test`, `defect`, `requirement`, `build`,
@@ -395,8 +407,10 @@ fixes that make the full catalog reachable.
 fallback; binary per-category (21 categories), batch inference. Returns clean
 errors instead of crashing if a runtime/model is unavailable. Companions:
 `classify_technical_debt_all` (multi-label sweep), `classify_technical_debt_ensemble`
-(weighted multi-model), `classify_github_issues` (fetch→extract→classify a repo's
-issues), plus `td_split_data` / `td_export_onnx` / `td_train` lifecycle wrappers.
+(weighted multi-model on tdsuite's native torch-free `OnnxEnsembleInferenceEngine`
+by default; `backend=torch` opt-in; CPU fallback), `classify_github_issues`
+(fetch→extract→classify a repo's issues), plus `td_split_data` / `td_export_onnx`
+/ `td_train` lifecycle wrappers.
 - `**analyze_code_intelligence**` — pure-Python AST: symbols, signatures,
 per-function metrics (cyclomatic complexity, LOC, params, nesting), import
 graph, find-usages — all with `file:line:col`.
@@ -468,7 +482,7 @@ engine is mocked so no model is ever downloaded.
 | `test_config.py`       | loading, defaults, singleton, `flatten_thresholds`, `get_thresholds_flat`, `resolve_api_key`, openai config |
 | `test_agent.py`        | provider factory, mocked OpenAI streaming + tool-call loop, `max_tokens`→`max_completion_tokens` retry      |
 | `test_tools.py`        | helpers, real Python/ML detectors, ML normalization (both key shapes), mocked TD engine                     |
-| `test_td_features.py`  | corrected TD model map, batch/sweep/ensemble inference, GitHub-issues pipeline, data-split/ONNX/train wrappers |
+| `test_td_features.py`  | corrected TD model map, batch/sweep inference, weighted ensemble (native ONNX default, torch opt-in, CPU fallback), GitHub-issues pipeline, data-split/ONNX/train wrappers |
 | `test_reporter.py`     | binary TD normalization, ML normalization, markdown/json render                                             |
 | `test_code_intel.py`   | symbols, metrics, find-usages, import graph, project summary                                                |
 | `test_cli.py`          | `show-config`, `list-tools`, `providers`, `doctor`, `run-tool …`, mocked agent commands                     |
@@ -482,7 +496,7 @@ Run it:
 uv run python -m pytest tests/ -q
 ```
 
-Current result: **211 passed** in ~12 s (all detectors installed; web tests run when the `web` extra is present).
+Current result: **215 passed** in ~24 s (all detectors installed; web tests run when the `web` extra is present).
 
 ## Report Structure
 

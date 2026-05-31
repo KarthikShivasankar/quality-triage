@@ -543,10 +543,15 @@ def tool_classify_td_all(ctx, text, from_file, categories, device, output):
 @click.option("--model", "model_names", multiple=True, help="HuggingFace model id to add (repeatable)")
 @click.option("--weight", "weights", multiple=True, type=float, help="Per-model weight (repeatable, matches model order)")
 @click.option("--device", type=click.Choice(["cpu", "cuda", "mps"]), default=None)
+@click.option("--backend", type=click.Choice(["auto", "onnx", "torch"]), default=None,
+              help="Ensemble backend: onnx (torch-free, default), torch, or auto")
 @click.option("--output", "-o", default=None)
 @click.pass_context
-def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, weights, device, output):
+def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, weights, device, backend, output):
     """Classify snippets with a WEIGHTED ENSEMBLE of TD models.
+
+    Runs on the native torch-free ONNX ensemble by default; pass
+    --backend torch to force the PyTorch engine.
 
     \b
     Example:
@@ -571,6 +576,7 @@ def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, wei
             categories=list(categories) or None,
             weights=list(weights) or None,
             device=device,
+            backend=backend,
         )
     _print_tool_result(result, "json", output, "TD Ensemble Classification")
 

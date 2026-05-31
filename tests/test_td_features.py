@@ -99,14 +99,48 @@ def fake_tdsuite(monkeypatch):
             super().__init__()
             self.weights = weights or [1.0]
 
+    class OnnxEnsembleInferenceEngine(_FakeEngine):
+        """Fake of tdsuite's native torch-free ONNX ensemble engine.
+
+        Returns a distinct probability (0.91) so tests can tell which backend
+        actually ran, and normalises weights to sum to 1 like the real engine.
+        """
+
+        def __init__(self, model_paths=None, model_names=None, max_length=512,
+                     show_progress=True, device=None, weights=None, token=None):
+            super().__init__()
+            n = len((model_paths or []) + (model_names or [])) or 1
+            if weights is None:
+                self.weights = [1.0 / n] * n
+            else:
+                total = sum(weights) or 1.0
+                self.weights = [w / total for w in weights]
+
+        def predict_single(self, text):
+            return {"text": text, "predicted_class": 1, "predicted_probability": 0.91,
+                    "class_probabilities": [0.09, 0.91]}
+
+        def predict_batch(self, texts, batch_size=32):
+            return [
+                {"text": t, "predicted_class": 1, "predicted_probability": 0.91,
+                 "class_probabilities": [0.09, 0.91]}
+                for t in texts
+            ]
+
     utils_mod.OnnxInferenceEngine = OnnxInferenceEngine
     utils_mod.InferenceEngine = InferenceEngine
     utils_mod.EnsembleInferenceEngine = EnsembleInferenceEngine
+    utils_mod.OnnxEnsembleInferenceEngine = OnnxEnsembleInferenceEngine
     tdsuite_mod.utils = utils_mod
 
     monkeypatch.setitem(sys.modules, "tdsuite", tdsuite_mod)
     monkeypatch.setitem(sys.modules, "tdsuite.utils", utils_mod)
-    return {"onnx": OnnxInferenceEngine, "torch": InferenceEngine, "ensemble": EnsembleInferenceEngine}
+    return {
+        "onnx": OnnxInferenceEngine,
+        "torch": InferenceEngine,
+        "ensemble": EnsembleInferenceEngine,
+        "onnx_ensemble": OnnxEnsembleInferenceEngine,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +198,47 @@ class TestEnsemble:
         assert len(result["predictions"]) == 2
         assert "karths/binary_classification_train_secu" in result["models"]
 
+    def test_ensemble_uses_native_onnx_by_default(self, fake_tdsuite):
+        # With the native OnnxEnsembleInferenceEngine available, auto/onnx must
+        # use it (not torch, not the manual CPU fallback).
+        from code_review_agent.tools import classify_technical_debt_ensemble
+        result = classify_technical_debt_ensemble(
+            ["a", "b"], categories=["security", "design"]
+        )
+        assert result["backend"] == "onnx"
+        # The ONNX ensemble fake reports prob 0.91 (distinct from the others).
+        assert all(p["predicted_probability"] == 0.91 for p in result["predictions"])
+
+    def test_ensemble_weights_are_normalised(self, fake_tdsuite):
+        from code_review_agent.tools import classify_technical_debt_ensemble
+        result = classify_technical_debt_ensemble(
+            ["a"], categories=["security", "design"], weights=[3.0, 1.0]
+        )
+        assert result["backend"] == "onnx"
+        assert result["weights"] == pytest.approx([0.75, 0.25])
+
+    def test_ensemble_torch_backend_opt_in(self, fake_tdsuite):
+        # backend="torch" forces the PyTorch EnsembleInferenceEngine.
+        from code_review_agent.tools import classify_technical_debt_ensemble
+        result = classify_technical_debt_ensemble(
+            ["a", "b"], categories=["security", "design"], backend="torch"
+        )
+        assert result["backend"] == "torch"
+        # Torch fake's predict_batch returns 0.77.
+        assert all(p["predicted_probability"] == 0.77 for p in result["predictions"])
+
+    def test_ensemble_onnx_backend_errors_when_engine_missing(self, fake_tdsuite, monkeypatch):
+        # backend="onnx" must NOT silently fall back to torch when the native
+        # ONNX ensemble engine is unavailable.
+        import sys as _sys
+        utils_mod = _sys.modules["tdsuite.utils"]
+        monkeypatch.delattr(utils_mod, "OnnxEnsembleInferenceEngine", raising=False)
+        from code_review_agent.tools import classify_technical_debt_ensemble
+        result = classify_technical_debt_ensemble(
+            ["a"], categories=["security", "design"], backend="onnx"
+        )
+        assert "error" in result
+
     def test_ensemble_requires_models(self, fake_tdsuite):
         from code_review_agent.tools import classify_technical_debt_ensemble
         assert "error" in classify_technical_debt_ensemble(["a"])
@@ -172,17 +247,19 @@ class TestEnsemble:
         from code_review_agent.tools import classify_technical_debt_ensemble
         assert "error" in classify_technical_debt_ensemble(["a"], categories=["bogus"])
 
-    def test_ensemble_cpu_fallback_when_torch_engine_missing(self, fake_tdsuite, monkeypatch):
-        # Drop the torch-backed ensemble engine so the import fails and the
-        # CPU/ONNX manual weighted ensemble path is exercised instead.
+    def test_ensemble_cpu_fallback_when_engines_missing(self, fake_tdsuite, monkeypatch):
+        # Drop BOTH the native ONNX ensemble and the torch-backed ensemble so the
+        # hand-rolled CPU/ONNX manual weighted ensemble path is exercised.
         import sys as _sys
         utils_mod = _sys.modules["tdsuite.utils"]
+        monkeypatch.delattr(utils_mod, "OnnxEnsembleInferenceEngine", raising=False)
         monkeypatch.delattr(utils_mod, "EnsembleInferenceEngine", raising=False)
         from code_review_agent.tools import classify_technical_debt_ensemble
         result = classify_technical_debt_ensemble(
             ["a"], categories=["security", "design"], weights=[0.7, 0.3]
         )
         assert result["tool"] == "td_classify_ensemble"
+        assert result["backend"] == "cpu-manual"
         # Each fake model reports class-1 prob 0.88, so weighted avg is 0.88 -> class 1.
         pred = result["predictions"][0]
         assert pred["predicted_class"] == 1

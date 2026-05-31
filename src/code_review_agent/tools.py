@@ -654,6 +654,36 @@ def _load_onnx_engine_class():
         return None
 
 
+def _load_onnx_ensemble_engine_class():
+    """
+    Resolve tdsuite's ``OnnxEnsembleInferenceEngine`` class (torch-free).
+
+    Same loading strategy as :func:`_load_onnx_engine_class`: the eager
+    ``tdsuite.utils.__init__`` pulls torch/``datasets``-backed modules, so the
+    direct import fails on a CPU-only box. We then load ``onnx_inference.py``
+    by file path — it only needs numpy/pandas/onnxruntime/transformers — so the
+    native weighted ONNX ensemble keeps working without torch. Returns ``None``
+    when the installed tdsuite predates the engine.
+    """
+    try:
+        from tdsuite.utils import OnnxEnsembleInferenceEngine
+        return OnnxEnsembleInferenceEngine
+    except Exception:
+        pass
+    try:
+        import importlib.util
+        import tdsuite
+        fp = Path(tdsuite.__file__).parent / "utils" / "onnx_inference.py"
+        if not fp.exists():
+            return None
+        spec = importlib.util.spec_from_file_location("tdsuite_onnx_inference_standalone", fp)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return getattr(mod, "OnnxEnsembleInferenceEngine", None)
+    except Exception:
+        return None
+
+
 def _build_td_engine(model_path: str, onnx_path: str | None, device: str, backend: str):
     """
     Build a tdsuite inference engine ADAPTIVELY.
@@ -892,6 +922,7 @@ def classify_technical_debt_ensemble(
     weights: list[float] | None = None,
     device: str | None = None,
     batch_size: int | None = None,
+    backend: str | None = None,
 ) -> dict[str, Any]:
     """
     Classify ``texts`` with a WEIGHTED ENSEMBLE of TD models.
@@ -899,8 +930,20 @@ def classify_technical_debt_ensemble(
     Models can be given as HuggingFace ids (``model_names``), local checkpoint
     dirs (``model_paths``), or friendly category names (``categories``, resolved
     via the category->model map). ``weights`` are optional per-model weights
-    (normalised internally by tdsuite). Wraps tdsuite's ``EnsembleInferenceEngine``
-    and stays defensive about missing heavy deps.
+    (normalised to sum to 1).
+
+    Backend resolution (``backend`` = ``auto`` | ``onnx`` | ``torch``):
+
+    1. **onnx/auto** — tdsuite's native, torch-free ``OnnxEnsembleInferenceEngine``
+       (weighted mean of per-model softmax probabilities; CPU by default, GPU via
+       ``onnxruntime-gpu``). This is the default.
+    2. **torch** (or when ONNX is unavailable) — the PyTorch
+       ``EnsembleInferenceEngine``.
+    3. Last resort — a hand-rolled CPU ensemble that runs each binary model
+       independently and combines the present-probabilities.
+
+    Stays defensive about missing heavy deps, returning ``{"error": ...}`` rather
+    than crashing.
     """
     if not texts:
         return {"error": "No texts provided"}
@@ -908,6 +951,7 @@ def classify_technical_debt_ensemble(
     cfg = _get_cfg()
     device = device or cfg.tools.td_classifier.device
     batch_size = batch_size or getattr(cfg.tools.td_classifier, "batch_size", 32)
+    backend = (backend or getattr(cfg.tools.td_classifier, "backend", "auto")).lower()
 
     names = list(model_names or [])
     if categories:
@@ -930,27 +974,56 @@ def classify_technical_debt_ensemble(
 
     all_models = (model_paths or []) + names
 
-    # Fast path: tdsuite's torch-backed ensemble engine, if it imports cleanly.
-    try:
-        from tdsuite.utils import EnsembleInferenceEngine
+    # Preferred path: tdsuite's native torch-free ONNX ensemble engine.
+    if backend in ("onnx", "auto"):
+        OnnxEnsemble = _load_onnx_ensemble_engine_class()
+        if OnnxEnsemble is not None:
+            try:
+                engine = OnnxEnsemble(
+                    model_paths=model_paths or None,
+                    model_names=names or None,
+                    device=device,
+                    weights=weights,
+                )
+                predictions = _run_td_predictions(engine, texts, batch_size)
+                return {
+                    "tool": "td_classify_ensemble",
+                    "backend": "onnx",
+                    "models": all_models,
+                    "weights": getattr(engine, "weights", weights),
+                    "label": "Technical Debt (ensemble)",
+                    "predictions": predictions,
+                }
+            except Exception:
+                # Fall through to torch / manual CPU ensemble below.
+                pass
+        elif backend == "onnx":
+            return {"error": "OnnxEnsembleInferenceEngine unavailable: update tdsuite or use backend=torch"}
 
-        engine = EnsembleInferenceEngine(
-            model_paths=model_paths or None,
-            model_names=names or None,
-            device=device,
-            weights=weights,
-        )
-        predictions = _run_td_predictions(engine, texts, batch_size)
-        return {
-            "tool": "td_classify_ensemble",
-            "models": all_models,
-            "weights": getattr(engine, "weights", weights),
-            "label": "Technical Debt (ensemble)",
-            "predictions": predictions,
-        }
-    except Exception:
-        # Fall through to the CPU/ONNX manual ensemble below (no torch needed).
-        pass
+    # PyTorch ensemble: explicit opt-in, or auto fallback when ONNX is missing.
+    if backend in ("torch", "auto"):
+        try:
+            from tdsuite.utils import EnsembleInferenceEngine
+
+            engine = EnsembleInferenceEngine(
+                model_paths=model_paths or None,
+                model_names=names or None,
+                device=device,
+                weights=weights,
+            )
+            predictions = _run_td_predictions(engine, texts, batch_size)
+            return {
+                "tool": "td_classify_ensemble",
+                "backend": "torch",
+                "models": all_models,
+                "weights": getattr(engine, "weights", weights),
+                "label": "Technical Debt (ensemble)",
+                "predictions": predictions,
+            }
+        except Exception:
+            if backend == "torch":
+                return {"error": "PyTorch EnsembleInferenceEngine unavailable: install the torch extra"}
+            # auto: fall through to the manual CPU ensemble below.
 
     return _ensemble_predict_cpu(all_models, texts, weights, device, backend="auto", batch_size=batch_size)
 
@@ -1022,6 +1095,7 @@ def _ensemble_predict_cpu(
 
     return {
         "tool": "td_classify_ensemble",
+        "backend": "cpu-manual",
         "models": models,
         "weights": norm_weights,
         "label": "Technical Debt (ensemble)",
