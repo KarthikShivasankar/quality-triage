@@ -1,5 +1,10 @@
 # Quality Triage — AI-Powered Code Review Agent
 
+[![PyPI version](https://img.shields.io/pypi/v/quality-triage.svg)](https://pypi.org/project/quality-triage/)
+[![Python versions](https://img.shields.io/pypi/pyversions/quality-triage.svg)](https://pypi.org/project/quality-triage/)
+[![CI](https://github.com/KarthikShivasankar/quality-triage/actions/workflows/ci.yml/badge.svg)](https://github.com/KarthikShivasankar/quality-triage/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An agentic code review tool that combines ML-based smell detection, AST analysis,
 technical-debt classification, and LLM synthesis to produce structured, actionable
 code-quality reports with exact `file:line:col` locations.
@@ -11,11 +16,11 @@ harness (Claude Code, Codex, Cursor, Pi, Antigravity) can drive it.
 
 ## Run with an AI coding agent
 
-- Canonical agent contract: `[skills.md](skills.md)`
-- Claude-specific playbook: `[docs/claude-code.md](docs/claude-code.md)`
-- Cross-agent portability: `[docs/agent-interop.md](docs/agent-interop.md)`
-- Harness integration assets (MCP + CLI): `[integrations/](integrations/)`
-- Reusable command/prompt snippets: `[scripts/agent_review_examples.md](scripts/agent_review_examples.md)`
+- Canonical agent contract: [skills.md](skills.md)
+- Claude-specific playbook: [docs/claude-code.md](docs/claude-code.md)
+- Cross-agent portability: [docs/agent-interop.md](docs/agent-interop.md)
+- Harness integration assets (MCP + CLI): [integrations/](integrations/)
+- Reusable command/prompt snippets: [scripts/agent_review_examples.md](scripts/agent_review_examples.md)
 
 Minimal bootstrap:
 
@@ -77,7 +82,7 @@ The three detector engines (`ml-code-smell-detector`, `code-quality-analyzer`,
 
 ### From source (development)
 
-Requires `[uv](https://docs.astral.sh/uv/)`.
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/KarthikShivasankar/quality-triage.git
@@ -287,7 +292,7 @@ detector package's own defaults, so partial overrides are safe.
 | `CODE_REVIEW_CONFIG`                                           | Optional path to an alternate `config.yaml`          |
 
 
-See `[.env.example](.env.example)` for a template.
+See [.env.example](.env.example) for a template.
 
 ## CLI Reference
 
@@ -384,15 +389,15 @@ code-review-mcp                 # console script
 # or: uv run python -m code_review_agent.mcp_server
 ```
 
-Ready-to-use configs for each harness live in `[integrations/](integrations/)`:
+Ready-to-use configs for each harness live in [integrations/](integrations/):
 
 
 | Harness               | Path                                                     |
 | --------------------- | -------------------------------------------------------- |
-| Claude Code / Desktop | `[integrations/claude-code/](integrations/claude-code/)` |
-| Codex                 | `[integrations/codex/](integrations/codex/)`             |
-| Pi                    | `[integrations/pi/](integrations/pi/)`                   |
-| Antigravity           | `[integrations/antigravity/](integrations/antigravity/)` |
+| Claude Code / Desktop | [integrations/claude-code/](integrations/claude-code/) |
+| Codex                 | [integrations/codex/](integrations/codex/)             |
+| Pi                    | [integrations/pi/](integrations/pi/)                   |
+| Antigravity           | [integrations/antigravity/](integrations/antigravity/) |
 
 
 ## Web UI (FastAPI)
