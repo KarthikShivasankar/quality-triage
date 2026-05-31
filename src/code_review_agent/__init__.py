@@ -8,4 +8,4 @@ Code Review Agent — AI-powered code review using:
 from code_review_agent.agent import CodeReviewAgent
 
 __all__ = ["CodeReviewAgent"]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

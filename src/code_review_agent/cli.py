@@ -1298,7 +1298,7 @@ def doctor(ctx):
 
     cfg = _load_cfg(ctx.obj.get("config_path"))
 
-    table = Table(title="code-review-agent doctor", show_lines=False)
+    table = Table(title="quality-triage doctor (code-review)", show_lines=False)
     table.add_column("Check", style="cyan", no_wrap=True)
     table.add_column("Status", justify="center", no_wrap=True)
     table.add_column("Detail")

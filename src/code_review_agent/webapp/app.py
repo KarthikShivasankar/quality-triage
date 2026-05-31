@@ -156,7 +156,7 @@ def create_app(config_path: str | None = None):
     from code_review_agent.config import get_config
     from code_review_agent.fixes import FixSuggestion, apply_fixes
 
-    app = FastAPI(title="code-review-agent")
+    app = FastAPI(title="quality-triage")
 
     def _cfg():
         return get_config(config_path)

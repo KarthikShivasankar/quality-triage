@@ -551,11 +551,15 @@ Then create a GitHub environment named `pypi` (Settings → Environments).
 # 1. Bump the version in BOTH places (must match):
 #    - pyproject.toml  -> [project] version
 #    - src/code_review_agent/__init__.py -> __version__
-# 2. Update docs / CHANGELOG as needed, commit.
+# 2. Add a CHANGELOG.md entry and update docs as needed, commit.
 # 3. Tag and push — this fires the release workflow:
 git tag v0.3.0
 git push origin v0.3.0
 ```
+
+The `release.yml` build job verifies the tag matches the `pyproject.toml`
+version and fails fast on a mismatch. Release history lives in
+[`CHANGELOG.md`](CHANGELOG.md).
 
 The workflow builds the sdist + wheel, runs `twine check`, and publishes to PyPI
 via OIDC. You can re-run it manually from the Actions tab (`workflow_dispatch`).

@@ -45,7 +45,7 @@ def build_server():
     except ImportError as exc:  # pragma: no cover - exercised only without extra
         raise ImportError(_INSTALL_HINT) from exc
 
-    server = FastMCP("code-review-agent")
+    server = FastMCP("quality-triage")
 
     @server.tool()
     def detect_ml_smells(path: str, ignore_dirs: list[str] | None = None) -> str:
