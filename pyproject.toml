@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-review-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.40.0",
     "openai>=1.0.0",
@@ -17,15 +17,29 @@ dependencies = [
     "click>=8.0",
     "rich>=13.0",
     "pyyaml>=6.0",
+    "onnxruntime>=1.16",
+    "huggingface_hub>=0.20",
+]
+
+[project.optional-dependencies]
+# The MCP SDK requires Python >= 3.10; gate it so the project still resolves on 3.9.
+mcp = ["mcp>=1.0; python_version >= '3.10'"]
+# FastAPI + HTML UI. python-multipart is required for HTML form parsing.
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "python-multipart>=0.0.9",
 ]
 
 [project.scripts]
 code-review = "code_review_agent.cli:main"
+code-review-mcp = "code_review_agent.mcp_server:main"
+code-review-web = "code_review_agent.webapp.app:main"
 
 [tool.uv.sources]
-ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", branch = "dev" }
-tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", branch = "dev" }
-code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", branch = "dev" }
+ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", branch = "main" }
+tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", branch = "main" }
+code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", branch = "main" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/code_review_agent"]

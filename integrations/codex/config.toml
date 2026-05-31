@@ -1,0 +1,17 @@
+# Codex config snippet for quality-triage.
+# Merge the relevant parts into ~/.codex/config.toml
+
+# --- MCP server (universal path) ---
+[mcp_servers.code-review]
+command = "code-review-mcp"
+args = []
+# If not on PATH, pin to this project via uv:
+# command = "uv"
+# args = ["run", "--directory", "/abs/path/to/quality-triage", "code-review-mcp"]
+
+# --- Optional: a dedicated profile for code-review sessions ---
+# Select with:  codex --profile code-review
+[profiles.code-review]
+# model = "gpt-5.3-codex"          # your preferred Codex model
+# approval_policy = "on-request"
+# instructions = "Use the code-review MCP tools (or the `code-review` CLI). Follow skills.md: report critical issues first with file:line:col, then a now/next/later plan."

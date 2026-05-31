@@ -4,20 +4,47 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Provider (Ollama is default — no API key required)
+# Provider: "ollama" (default, local, no API key) | "openai" | "anthropic"
 # ---------------------------------------------------------------------------
 provider: ollama
 
+# --- Local Ollama (OpenAI-compatible REST API) ------------------------------
 ollama:
-  model: qwen2.5-coder:7b        # supports function calling; try llama3.1 or mistral-nemo
+  model: qwen3.5:4b              # supports function calling; try llama3.1 or mistral-nemo
   base_url: http://localhost:11434/v1
   api_key: ollama
   max_tokens: 8192
   max_iterations: 25
   timeout: 120                   # per-request timeout in seconds
 
+# --- Generic OpenAI-compatible backend --------------------------------------
+# Works with the official OpenAI API and ANY service exposing an
+# OpenAI-compatible /chat/completions endpoint. Just change base_url + key.
+#
+#   OpenAI      base_url: https://api.openai.com/v1            key env: OPENAI_API_KEY
+#   Groq        base_url: https://api.groq.com/openai/v1       key env: GROQ_API_KEY
+#   OpenRouter  base_url: https://openrouter.ai/api/v1         key env: OPENROUTER_API_KEY
+#               (also set extra_headers HTTP-Referer / X-Title)
+#   Together    base_url: https://api.together.xyz/v1          key env: TOGETHER_API_KEY
+#   Fireworks   base_url: https://api.fireworks.ai/inference/v1 key env: FIREWORKS_API_KEY
+#   Mistral     base_url: https://api.mistral.ai/v1            key env: MISTRAL_API_KEY
+#   llama.cpp   base_url: http://localhost:8080/v1             key: any (server)
+#   vLLM        base_url: http://localhost:8000/v1             key: any
+#   LM Studio   base_url: http://localhost:1234/v1            key: any
+openai:
+  model: gpt-4o-mini
+  base_url: https://api.openai.com/v1
+  api_key_env: OPENAI_API_KEY    # name of the env var holding the key
+  # api_key:                     # (discouraged) put the key inline instead of env
+  max_tokens: 8192
+  max_iterations: 25
+  timeout: 180
+  extra_headers: {}              # e.g. {"HTTP-Referer": "...", "X-Title": "..."}
+
+# --- Anthropic Claude -------------------------------------------------------
 anthropic:
   model: claude-opus-4-6
+  api_key_env: ANTHROPIC_API_KEY
   max_tokens: 8192
   max_iterations: 20
   # api_key: set via ANTHROPIC_API_KEY environment variable
@@ -50,9 +77,43 @@ tools:
     - .ruff_cache
   read_file_max_lines: 500
   td_classifier:
-    model_path: KarthikShivasankar/td-classifier
+    # Binary, per-category technical-debt model on the HuggingFace Hub.
+    # General TD detector by default; pass --category on the CLI to pick another.
+    # Categories: general, code, design, documentation, test, defect, requirement,
+    # build, automation, people, process, infrastructure, architecture, service,
+    # security, performance, usability, maintainability, reliability, portability,
+    # compatibility. List them with: code-review run-tool td-categories
+    # Multi-label sweep:  run-tool classify-td-all
+    # Weighted ensemble:  run-tool classify-td-ensemble
+    # GitHub issues pipeline: run-tool td-issues owner/repo  (set GITHUB_TOKEN)
+    model_path: karths/binary_classification_train_TD
+    backend: auto                # auto | onnx | torch
     device: cpu                  # cpu | cuda | mps
+    # onnx_path:                 # optional local .onnx model to use directly
     batch_size: 32
+
+# ---------------------------------------------------------------------------
+# Review selection + fixes (what runs, and whether fixes may be applied)
+# CLI flags override these:  --check, --td-category, --min-severity,
+# --format, --suggest-fixes / --fix-dry-run / --apply-fixes
+# ---------------------------------------------------------------------------
+review:
+  # Detector families to run by default. Any subset of:
+  #   ml | code | architectural | structural | td | code-intel
+  checks:
+    - ml
+    - code
+    - architectural
+    - structural
+    - td
+    - code-intel
+  # TD categories used when the 'td' family runs (see: run-tool td-categories).
+  td_categories:
+    - general
+  min_severity: low              # critical | high | medium | low | info
+  output_format: markdown        # markdown | json
+  suggest_fixes: false           # ask the agent for machine-applicable fixes
+  apply_fixes: false             # NEVER writes without explicit --apply-fixes + confirm
 
 # ---------------------------------------------------------------------------
 # Code intelligence (pure-Python AST analysis)
@@ -105,6 +166,12 @@ code_smells:
   LAZY_CLASS_METHODS:
     value: 4
     explanation: "Classes with this few methods or fewer are lazy."
+  LAZY_CLASS_LINES:
+    value: 15
+    explanation: "Lazy-class detector: max total non-trivial method lines (key omitted by the upstream package config; added so the detector can run)."
+  DATA_CLASS_METHODS:
+    value: 5
+    explanation: "Data-class detector: min getter/setter count with no other methods (key omitted by the upstream package config; added so the detector can run)."
   FEATURE_ENVY_CALLS:
     value: 3
     explanation: "Calls to another object's methods threshold."

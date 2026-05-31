@@ -15,12 +15,40 @@ code-review show-config
 code-review review ./your_project
 ```
 
-If you want Anthropic backend:
+If you want the Anthropic backend:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-...
 code-review review ./your_project --provider anthropic
 ```
+
+If you want a generic OpenAI-compatible backend (OpenAI, Groq, OpenRouter,
+Together, llama.cpp, vLLM, LM Studio):
+
+```bash
+export OPENAI_API_KEY=sk-...
+code-review review ./your_project --provider openai --model gpt-4o-mini
+# Point at another service:
+code-review review ./your_project --provider openai \
+  --base-url https://api.groq.com/openai/v1 --model llama-3.3-70b-versatile
+```
+
+Check providers and environment health:
+
+```bash
+code-review providers   # models + base URLs + API-key status
+code-review doctor      # detectors, torch/onnxruntime, LLM backend reachability
+```
+
+### MCP server (Claude Code / Claude Desktop)
+
+```bash
+uv sync --extra mcp
+claude mcp add code-review -- code-review-mcp
+```
+
+See [`integrations/claude-code/`](../integrations/claude-code/) for a
+`claude_desktop_config.json` snippet and a ready-to-use skill.
 
 ## Mode Selection
 
@@ -77,6 +105,14 @@ Cause:
 
 Fix:
 - Set `ANTHROPIC_API_KEY` or switch to `--provider ollama`.
+
+### `openai provider requires an API key`
+Cause:
+- `--provider openai` selected without the configured key env var.
+
+Fix:
+- Set `OPENAI_API_KEY` (or the `openai.api_key_env` var), pass `--api-key`,
+  or switch to `--provider ollama`. Run `code-review providers` to see status.
 
 ### No Python files found
 Cause:

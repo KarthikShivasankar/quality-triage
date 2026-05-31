@@ -24,7 +24,7 @@ import yaml
 
 @dataclass
 class OllamaConfig:
-    model: str = "qwen2.5-coder:7b"
+    model: str = "qwen3.5:4b"
     base_url: str = "http://localhost:11434/v1"
     api_key: str = "ollama"
     max_tokens: int = 8192
@@ -33,8 +33,36 @@ class OllamaConfig:
 
 
 @dataclass
+class OpenAIConfig:
+    """Generic OpenAI-compatible backend.
+
+    Works with the official OpenAI API and any service that exposes an
+    OpenAI-compatible ``/chat/completions`` endpoint: Groq, Together,
+    OpenRouter, Fireworks, DeepInfra, Mistral, a local llama.cpp ``server``,
+    vLLM, LM Studio, text-generation-webui, etc.
+
+    The API key is resolved (in priority order) from:
+      1. ``api_key`` set directly here (discouraged for secrets)
+      2. the environment variable named by ``api_key_env``
+      3. the generic ``OPENAI_API_KEY`` environment variable
+    """
+
+    model: str = "gpt-4o-mini"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str | None = None
+    api_key_env: str = "OPENAI_API_KEY"
+    max_tokens: int = 8192
+    max_iterations: int = 25
+    timeout: int = 180
+    # Extra headers (e.g. OpenRouter requires HTTP-Referer / X-Title)
+    extra_headers: dict = field(default_factory=dict)
+
+
+@dataclass
 class AnthropicConfig:
     model: str = "claude-opus-4-6"
+    api_key: str | None = None
+    api_key_env: str = "ANTHROPIC_API_KEY"
     max_tokens: int = 8192
     max_iterations: int = 20
 
@@ -48,8 +76,14 @@ class GithubConfig:
 
 @dataclass
 class TDClassifierConfig:
-    model_path: str = "KarthikShivasankar/td-classifier"
+    # The TD model family is now a set of *binary, per-category* models on the
+    # HuggingFace Hub under the ``karths/`` namespace. The default is the
+    # general technical-debt detector.
+    model_path: str = "karths/binary_classification_train_TD"
+    # backend: "auto" (ONNX if available, else torch) | "onnx" | "torch"
+    backend: str = "auto"
     device: str = "cpu"
+    onnx_path: str | None = None
     batch_size: int = 32
 
 
@@ -82,14 +116,36 @@ class ReportConfig:
 
 
 @dataclass
+class ReviewConfig:
+    """User-controllable defaults for what a review runs and how it fixes.
+
+    ``checks`` selects which detector families run; ``td_categories`` selects
+    which technical-debt category models are used. CLI flags override these.
+    Fixes are SUGGEST-ONLY by default — applying requires explicit opt-in.
+    """
+
+    # Detector families: ml | code | architectural | structural | td | code-intel
+    checks: list[str] = field(default_factory=lambda: [
+        "ml", "code", "architectural", "structural", "td", "code-intel",
+    ])
+    td_categories: list[str] = field(default_factory=lambda: ["general"])
+    min_severity: str = "low"
+    output_format: str = "markdown"   # markdown | json
+    suggest_fixes: bool = False       # ask the agent for machine-applicable fixes
+    apply_fixes: bool = False         # NEVER write without explicit confirmation
+
+
+@dataclass
 class AppConfig:
     provider: str = "ollama"
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    openai: OpenAIConfig = field(default_factory=OpenAIConfig)
     anthropic: AnthropicConfig = field(default_factory=AnthropicConfig)
     github: GithubConfig = field(default_factory=GithubConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     code_intel: CodeIntelConfig = field(default_factory=CodeIntelConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
+    review: ReviewConfig = field(default_factory=ReviewConfig)
     _raw: dict = field(default_factory=dict, repr=False)
     _source: str = field(default="defaults", repr=False)
 
@@ -153,11 +209,13 @@ def load_config(path: str | None = None) -> AppConfig:
     return AppConfig(
         provider=raw.get("provider", "ollama"),
         ollama=sub("ollama", OllamaConfig),
+        openai=sub("openai", OpenAIConfig),
         anthropic=sub("anthropic", AnthropicConfig),
         github=sub("github", GithubConfig),
         tools=tools_cfg,
         code_intel=sub("code_intel", CodeIntelConfig),
         report=sub("report", ReportConfig),
+        review=sub("review", ReviewConfig),
         _raw=raw,
         _source=source,
     )
@@ -165,11 +223,47 @@ def load_config(path: str | None = None) -> AppConfig:
 
 def get_thresholds(config: AppConfig, smell_type: str) -> dict[str, Any]:
     """
-    Return the thresholds dict for a detector type.
+    Return the raw thresholds dict for a detector type.
     smell_type: "code_smells" | "architectural_smells" | "structural_smells"
     Returns {THRESHOLD_NAME: {"value": N, "explanation": "..."}, ...}
     """
     return config._raw.get(smell_type, {})
+
+
+def flatten_thresholds(raw: dict[str, Any]) -> dict[str, Any]:
+    """
+    Flatten the ``{NAME: {"value": N, "explanation": "..."}}`` config shape to
+    the ``{NAME: N}`` shape the code_quality_analyzer detectors actually expect.
+
+    Plain scalar values are passed through unchanged, so both shapes work.
+    """
+    flat: dict[str, Any] = {}
+    for name, spec in (raw or {}).items():
+        if isinstance(spec, dict) and "value" in spec:
+            flat[name] = spec["value"]
+        else:
+            flat[name] = spec
+    return flat
+
+
+def get_thresholds_flat(config: AppConfig, smell_type: str) -> dict[str, Any]:
+    """Return thresholds in the flat ``{NAME: value}`` shape detectors require."""
+    return flatten_thresholds(get_thresholds(config, smell_type))
+
+
+def resolve_api_key(
+    explicit: str | None,
+    api_key_env: str | None,
+    fallback_env: str = "OPENAI_API_KEY",
+) -> str | None:
+    """Resolve an API key from an explicit value, a named env var, or a fallback env var."""
+    if explicit:
+        return explicit
+    if api_key_env:
+        val = os.environ.get(api_key_env)
+        if val:
+            return val
+    return os.environ.get(fallback_env)
 
 
 # ---------------------------------------------------------------------------

@@ -19,27 +19,6 @@ from typing import Any
 # Constants
 # ---------------------------------------------------------------------------
 
-TD_LABEL_MAP: dict[int, str] = {
-    0:  "Architecture Debt",
-    1:  "Build Debt",
-    2:  "Code Debt",
-    3:  "Defect Debt",
-    4:  "Design Debt",
-    5:  "Documentation Debt",
-    6:  "Infrastructure Debt",
-    7:  "People Debt",
-    8:  "Process Debt",
-    9:  "Requirement Debt",
-    10: "Service Debt",
-    11: "Test Automation Debt",
-    12: "Test Debt",
-    13: "Versioning Debt",
-    14: "Security Debt",
-    15: "Performance Debt",
-    16: "Usability Debt",
-    17: "No Debt",
-}
-
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
 SEVERITY_EMOJI = {
@@ -161,9 +140,17 @@ class FindingNormalizer:
     def _norm_ml_smell(self, smell: Any, file_abs: str, prefix: str, out: list[Finding]):
         if not isinstance(smell, dict):
             return
-        name = smell.get("name", "Unknown")
+        # Handle both canonical and raw detector shapes (`name` vs `smell`).
+        name = smell.get("name") or smell.get("smell") or "ML Smell"
+        if len(name) > 60:
+            name = " ".join(name.split()[:8])
         fp = smell.get("file_path") or file_abs
-        line = int(smell.get("line_number", 0) or 0)
+        line_val = smell.get("line_number")
+        if line_val is None and smell.get("location"):
+            import re as _re
+            m = _re.search(r"\d+", str(smell["location"]))
+            line_val = int(m.group()) if m else 0
+        line = int(line_val or 0)
         sev_key = name.lower().replace(" ", "_")
         sev = _SEVERITY_ML.get(sev_key, Severity.HIGH)
         out.append(Finding(
@@ -174,10 +161,10 @@ class FindingNormalizer:
             file=_rel(fp, self.root),
             file_abs=str(fp),
             line=line,
-            col=None,
+            col=smell.get("col"),
             symbol=None,
-            message=smell.get("description", smell.get("name", "")),
-            how_to_fix=smell.get("how_to_fix"),
+            message=smell.get("description") or smell.get("smell") or name,
+            how_to_fix=smell.get("how_to_fix") or smell.get("fix"),
             code_snippet=smell.get("code_snippet"),
             framework=smell.get("framework"),
             extra={
@@ -244,21 +231,44 @@ class FindingNormalizer:
     # ---- TD classifier ----------------------------------------------------
 
     def normalize_td_predictions(self, raw: dict) -> list[dict]:
+        """
+        Interpret BINARY per-category TD predictions.
+
+        Each prediction has ``predicted_class`` 0/1 (1 = the model's category of
+        debt is present) and ``predicted_probability``. We keep only positive
+        (class==1) predictions, labelling them with the category derived from the
+        model id used (default "Technical Debt"). class==0 means no debt → skip.
+        """
+        # Human label for this run derived from the model id (the whole `raw`
+        # dict is one model's output).
+        run_label = raw.get("label") or "Technical Debt"
         out = []
         for pred in raw.get("predictions", []):
             if not isinstance(pred, dict):
                 continue
-            cls_idx = pred.get("predicted_class")
-            label = TD_LABEL_MAP.get(cls_idx, f"Class-{cls_idx}") if cls_idx is not None else "Unknown"
-            prob = pred.get("predicted_probability", 0.0)
-            if label == "No Debt":
+            if pred.get("error"):
+                out.append({
+                    "text": pred.get("text", ""),
+                    "category": run_label,
+                    "confidence": 0.0,
+                    "predicted_class": pred.get("predicted_class"),
+                    "error": pred.get("error"),
+                })
                 continue
+            cls = pred.get("predicted_class")
+            try:
+                cls_int = int(cls)
+            except (TypeError, ValueError):
+                continue
+            if cls_int != 1:
+                continue  # class 0 → no debt of this category
+            prob = pred.get("predicted_probability", 0.0)
             out.append({
                 "text": pred.get("text", ""),
-                "category": label,
-                "confidence": round(float(prob), 3),
-                "class_index": cls_idx,
-                "error": pred.get("error"),
+                "category": run_label,
+                "confidence": round(float(prob or 0.0), 3),
+                "predicted_class": cls_int,
+                "error": None,
             })
         return out
 

@@ -32,12 +32,23 @@ htmlcov/
 # Reports (generated output)
 reports/
 
+# Analysis log emitted by the detectors
+code_analysis.log
+
+# ONNX models exported/downloaded for the TD classifier
+*.onnx
+
+# HuggingFace model cache
+.cache/huggingface/
+huggingface/
+
 # Cloned repos (temp)
 /tmp/code_review_repos/
 
 # Editors
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
 *~

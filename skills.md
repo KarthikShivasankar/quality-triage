@@ -34,12 +34,37 @@ Bootstrap commands:
 uv sync
 ```
 
-Optional backend setup:
-- Ollama (default): no API key required
-- Anthropic: set `ANTHROPIC_API_KEY`
+Optional backend setup (providers):
+- `ollama` (default): local, no API key required
+- `openai` (generic OpenAI-compatible): set the configured key env var
+  (default `OPENAI_API_KEY`). Works with OpenAI, Groq, OpenRouter, Together,
+  Fireworks, Mistral, local llama.cpp `server`, vLLM, LM Studio — just change
+  `openai.base_url` + `openai.api_key_env` in `config.yaml`.
+- `anthropic`: set `ANTHROPIC_API_KEY`
+
+MCP server (universal harness integration), optional extra:
+
+```bash
+uv sync --extra mcp
+code-review-mcp        # stdio MCP server exposing the 6 analysis tools
+```
+
+FastAPI web UI (optional extra) — same tools/agent/fix engine as the CLI:
+
+```bash
+uv sync --extra web
+code-review-web        # serves http://127.0.0.1:8000 (localhost only)
+# or: uv run python -m code_review_agent.webapp.app
+```
+
+Fix-application safety contract (CLI `--apply-fixes` and the web Apply action):
+- Default is SUGGEST-ONLY; no files are written without explicit opt-in.
+- Applying requires confirmation; writes are confined to the target project and
+  create `.bak` backups; a fix whose ORIGINAL text no longer matches is skipped.
 
 Useful config override:
 - `CODE_REVIEW_CONFIG=/path/to/config.yaml`
+- `OPENAI_BASE_URL=...` (overrides `openai.base_url` for the `openai` provider)
 
 ## 4) Core Command Surface
 
@@ -47,14 +72,25 @@ Agent must only use documented commands:
 
 - Full review:
   - `code-review review <path-or-github-url>`
+  - Select families: `--check ml --check structural` (ml|code|architectural|structural|td|code-intel)
+  - Select TD categories: `--td-category security --td-category design`
+  - Severity focus / format: `--min-severity high` / `--format markdown|json`
+  - Fixes (gated, suggest-only by default): `--suggest-fixes`, `--fix-dry-run`, `--apply-fixes [--yes]`
 - Ask:
   - `code-review ask "<question>"`
 - Single-file deep dive:
-  - `code-review analyze-file <file.py>`
+  - `code-review analyze-file <file.py>` (also supports `--check`, `--suggest-fixes`, `--fix-dry-run`, `--apply-fixes`)
 - Targeted tool runs:
-  - `code-review run-tool ml-smells <path>`
-  - `code-review run-tool python-smells <path> --type all`
-  - `code-review run-tool classify-td --text "TODO: ..."`
+  - `code-review run-tool ml-smells <path> [--min-severity high]`
+  - `code-review run-tool python-smells <path> --type all [--min-severity high]`
+  - `code-review run-tool classify-td --text "TODO: ..." [--category security]`
+  - `code-review run-tool classify-td-all --text "TODO: ..."`   # sweep all categories
+  - `code-review run-tool classify-td-ensemble --category A --category B --text "..."`
+  - `code-review run-tool td-categories`                         # list categories + model ids
+  - `code-review run-tool td-issues <owner/repo> [--category C]` # GitHub issues TD pipeline
+  - `code-review run-tool td-split <data.csv> --output-dir <dir>`
+  - `code-review run-tool td-export-onnx --model-name <id> -o <out.onnx>`
+  - `code-review run-tool td-train <data.csv> --model-name <id> --output-dir <dir>`
   - `code-review run-tool code-intel <path> --top-n 15`
   - `code-review run-tool list-files <path>`
   - `code-review run-tool read-file <file.py>`
@@ -63,11 +99,24 @@ Agent must only use documented commands:
 - Config/tools discovery:
   - `code-review show-config`
   - `code-review list-tools`
+  - `code-review providers`   # configured providers + API-key status
+  - `code-review doctor`      # health check: detectors, runtimes, LLM backend
   - `code-review ollama-models`
 
-Provider and model overrides are supported on agent-driven commands:
-- `--provider ollama|anthropic`
+Provider and model overrides are supported on agent-driven commands
+(`review`, `ask`, `analyze-file`, `interactive`):
+- `--provider ollama|openai|anthropic`
 - `--model <name>`
+- `--base-url <url>`   # openai/ollama providers
+- `--api-key <key>`    # openai/anthropic providers
+
+Technical-debt classification is now a BINARY, per-category model (no single
+18-class model). Pick a category with `--category` (one of 21: general/code/
+design/documentation/test/defect/requirement/build/automation/people/process/
+infrastructure/architecture/service/security/performance/usability/
+maintainability/reliability/portability/compatibility). For a multi-label view
+across all categories use `classify-td-all`; for a weighted ensemble use
+`classify-td-ensemble`; to classify a repo's GitHub issues use `td-issues`.
 
 ## 5) Agent Task Recipes
 
@@ -147,8 +196,28 @@ Use this mapping when porting workflows to other agent ecosystems.
 - Persist long outputs with `--output` and summarize from saved artifacts.
 
 ### Generic MCP-compatible agents
-- Use one tool/action for shell command execution.
-- Use one tool/action for file reads when presenting report snippets.
+- Preferred: connect the bundled MCP server (`code-review-mcp`, install with
+  `uv sync --extra mcp`). It exposes the six analysis tools directly
+  (`detect_ml_smells`, `detect_python_smells`, `classify_technical_debt`,
+  `analyze_code_intelligence`, `list_python_files`, `read_file`).
+
+### Code-smell catalog notes
+- The agent supplements the installed `code_quality_analyzer` so the full
+  catalog is reachable (the package itself is not edited). Now-firing smells
+  that were previously dead: **Lazy Class**, **Dead Code**, **Data Class**
+  (defined upstream but never dispatched — invoked explicitly per file),
+  **Switch Statements** and **Deep Inheritance Tree (DIT)** (re-detected by
+  pure-AST supplements in `cqa_supplement.py` because the upstream branch
+  counter and inheritance graph are buggy).
+- Missing thresholds `LAZY_CLASS_LINES` (15) and `DATA_CLASS_METHODS` (5) are
+  supplied by the agent (and `config.yaml`) so those detectors don't `KeyError`.
+- `Unused Parameters` and `Large Comment Blocks` are *not* standalone smells
+  upstream: they fold into **Speculative Generality** and **Excessive Comments**
+  respectively. Coverage is asserted by `tests/test_smell_coverage.py`.
+- Ready-made harness configs live under [`integrations/`](integrations/)
+  (Claude Code, Codex, Pi, Antigravity).
+- Fallback: use one shell tool for `code-review ...` commands and one file-read
+  tool for report snippets.
 - Keep tool calls deterministic and idempotent.
 - Preserve safety rules from Section 7.
 

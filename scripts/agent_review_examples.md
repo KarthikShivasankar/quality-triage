@@ -24,6 +24,23 @@ export ANTHROPIC_API_KEY=sk-...
 code-review review ./my_project --provider anthropic --output reports/anthropic-review.md
 ```
 
+### 2b) Full review with a generic OpenAI-compatible backend
+
+```bash
+# OpenAI
+export OPENAI_API_KEY=sk-...
+code-review review ./my_project --provider openai --model gpt-4o-mini --output reports/openai-review.md
+
+# Groq (or any OpenAI-compatible service) — just change the base URL + key
+export GROQ_API_KEY=gsk-...
+code-review review ./my_project --provider openai \
+  --base-url https://api.groq.com/openai/v1 --model llama-3.3-70b-versatile
+
+# Local llama.cpp / vLLM / LM Studio (any key string works)
+code-review review ./my_project --provider openai \
+  --base-url http://localhost:8080/v1 --api-key local --model my-local-model
+```
+
 ### 3) GitHub URL review
 
 ```bash
@@ -49,10 +66,28 @@ code-review run-tool python-smells ./src --type structural
 code-review run-tool ml-smells ./src
 ```
 
-### 7) Technical debt classification
+### 7) Technical debt classification (binary, per-category)
 
 ```bash
+# General technical-debt detector (default)
 code-review run-tool classify-td --text "TODO: remove hard-coded timeout" --text "FIXME: retry strategy is brittle"
+
+# Target a specific debt category
+code-review run-tool classify-td --category security --text "HACK: bypass auth check"
+```
+
+### 8) Environment + providers
+
+```bash
+code-review providers   # configured providers + API-key status
+code-review doctor      # detectors, torch/onnxruntime, LLM backend health
+```
+
+### 9) MCP server (universal harness integration)
+
+```bash
+uv sync --extra mcp
+code-review-mcp         # stdio MCP server; see integrations/ for harness configs
 ```
 
 ## Prompt Templates for Claude Code
