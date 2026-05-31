@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from code_review_agent.config import get_config, resolve_api_key
 from code_review_agent.prompts import SYSTEM_PROMPT
@@ -28,16 +29,19 @@ from code_review_agent.tools import TOOL_DEFINITIONS_OPENAI, execute_tool
 _ANTHROPIC_TOOLS: list[dict[str, Any]] = []
 for _t in TOOL_DEFINITIONS_OPENAI:
     fn = _t["function"]
-    _ANTHROPIC_TOOLS.append({
-        "name": fn["name"],
-        "description": fn["description"],
-        "input_schema": fn["parameters"],
-    })
+    _ANTHROPIC_TOOLS.append(
+        {
+            "name": fn["name"],
+            "description": fn["description"],
+            "input_schema": fn["parameters"],
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
 # Base agent
 # ---------------------------------------------------------------------------
+
 
 class _BaseAgent:
     def review(self, path: str, extra_context: str = "") -> Iterator[str]:
@@ -64,6 +68,7 @@ class _BaseAgent:
 # Generic OpenAI-compatible backend (serves both `ollama` and `openai`)
 # ---------------------------------------------------------------------------
 
+
 class OpenAICompatibleAgent(_BaseAgent):
     """
     Agentic loop over any OpenAI-compatible ``/chat/completions`` endpoint.
@@ -86,6 +91,7 @@ class OpenAICompatibleAgent(_BaseAgent):
         allowed_tool_names: set[str] | None = None,
     ) -> None:
         from openai import OpenAI
+
         self.client = OpenAI(
             base_url=base_url,
             api_key=api_key or "not-needed",
@@ -119,13 +125,14 @@ class OpenAICompatibleAgent(_BaseAgent):
             msg = str(exc).lower()
             # Swap max_tokens <-> max_completion_tokens and retry once.
             if ("max_tokens" in msg or "max_completion_tokens" in msg) and (
-                "unsupported" in msg or "not supported" in msg
-                or "use" in msg or "invalid" in msg or "max_completion_tokens" in msg
+                "unsupported" in msg
+                or "not supported" in msg
+                or "use" in msg
+                or "invalid" in msg
+                or "max_completion_tokens" in msg
             ):
                 new_param = (
-                    "max_completion_tokens"
-                    if self._token_param == "max_tokens"
-                    else "max_tokens"
+                    "max_completion_tokens" if self._token_param == "max_tokens" else "max_tokens"
                 )
                 kwargs.pop(self._token_param, None)
                 kwargs[new_param] = self.max_tokens
@@ -167,7 +174,9 @@ class OpenAICompatibleAgent(_BaseAgent):
                             if tc.function.name:
                                 tool_calls_map[idx]["function"]["name"] += tc.function.name
                             if tc.function.arguments:
-                                tool_calls_map[idx]["function"]["arguments"] += tc.function.arguments
+                                tool_calls_map[idx]["function"]["arguments"] += (
+                                    tc.function.arguments
+                                )
 
             tool_calls = list(tool_calls_map.values())
             assistant_msg: dict[str, Any] = {"role": "assistant", "content": full_content}
@@ -185,19 +194,23 @@ class OpenAICompatibleAgent(_BaseAgent):
                 except json.JSONDecodeError:
                     inputs = {}
                 if self.allowed_tool_names is not None and name not in self.allowed_tool_names:
-                    result = json.dumps({
-                        "error": f"Tool '{name}' is not enabled for this review selection.",
-                        "allowed_tools": sorted(self.allowed_tool_names),
-                    })
+                    result = json.dumps(
+                        {
+                            "error": f"Tool '{name}' is not enabled for this review selection.",
+                            "allowed_tools": sorted(self.allowed_tool_names),
+                        }
+                    )
                     yield f"\n\n*[Tool **{name}** skipped — not in selection]*\n\n"
                 else:
                     yield f"\n\n*[Running tool: **{name}** …]*\n\n"
                     result = execute_tool(name, inputs)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "content": result,
+                    }
+                )
 
 
 # Backwards-compatible alias.
@@ -207,6 +220,7 @@ OllamaAgent = OpenAICompatibleAgent
 # ---------------------------------------------------------------------------
 # Anthropic backend
 # ---------------------------------------------------------------------------
+
 
 class AnthropicAgent(_BaseAgent):
     """Uses Claude Opus 4.6 with adaptive thinking + tool use."""
@@ -221,6 +235,7 @@ class AnthropicAgent(_BaseAgent):
         allowed_tool_names: set[str] | None = None,
     ) -> None:
         import anthropic
+
         key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         if not key:
             raise ValueError(
@@ -233,9 +248,11 @@ class AnthropicAgent(_BaseAgent):
         self.max_iterations = max_iterations
         if tools is not None:
             self.tools = [
-                {"name": t["function"]["name"],
-                 "description": t["function"]["description"],
-                 "input_schema": t["function"]["parameters"]}
+                {
+                    "name": t["function"]["name"],
+                    "description": t["function"]["description"],
+                    "input_schema": t["function"]["parameters"],
+                }
                 for t in tools
             ]
         else:
@@ -255,9 +272,8 @@ class AnthropicAgent(_BaseAgent):
                 messages=messages,
             ) as stream:
                 for event in stream:
-                    if event.type == "content_block_delta":
-                        if event.delta.type == "text_delta":
-                            yield event.delta.text
+                    if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                        yield event.delta.text
                 response = stream.get_final_message()
 
             content = response.content
@@ -275,23 +291,28 @@ class AnthropicAgent(_BaseAgent):
             for tb in tool_use_blocks:
                 if self.allowed_tool_names is not None and tb.name not in self.allowed_tool_names:
                     yield f"\n\n*[Tool **{tb.name}** skipped — not in selection]*\n\n"
-                    result = json.dumps({
-                        "error": f"Tool '{tb.name}' is not enabled for this review selection.",
-                    })
+                    result = json.dumps(
+                        {
+                            "error": f"Tool '{tb.name}' is not enabled for this review selection.",
+                        }
+                    )
                 else:
                     yield f"\n\n*[Running tool: **{tb.name}** …]*\n\n"
                     result = execute_tool(tb.name, tb.input)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tb.id,
-                    "content": result,
-                })
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tb.id,
+                        "content": result,
+                    }
+                )
             messages.append({"role": "user", "content": tool_results})
 
 
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
+
 
 class CodeReviewAgent:
     """

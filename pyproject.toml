@@ -3,24 +3,53 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "code-review-agent"
+name = "quality-triage"
 version = "0.2.0"
 description = "AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
+authors = [{ name = "Karthik Shivasankar" }]
+keywords = [
+    "code-review",
+    "static-analysis",
+    "code-smells",
+    "technical-debt",
+    "machine-learning",
+    "llm",
+    "mcp",
+    "ast",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "anthropic>=0.40.0",
     "openai>=1.0.0",
-    "ml-code-smell-detector",
-    "tdsuite",
-    "code-quality-analyzer",
+    "ml-code-smell-detector>=0.1.2",
+    "tdsuite>=0.1.2",
+    "code-quality-analyzer>=0.2.2",
     "click>=8.0",
     "rich>=13.0",
     "pyyaml>=6.0",
     "onnxruntime>=1.16",
     "huggingface_hub>=0.20",
 ]
+
+[project.urls]
+Homepage = "https://github.com/KarthikShivasankar/quality-triage"
+Repository = "https://github.com/KarthikShivasankar/quality-triage"
+Issues = "https://github.com/KarthikShivasankar/quality-triage/issues"
 
 [project.optional-dependencies]
 # The MCP SDK requires Python >= 3.10 (matches the project's requires-python).
@@ -56,6 +85,18 @@ dev = [
 line-length = 100
 target-version = "py310"
 src = ["src"]
+
+[tool.ruff.lint]
+# E/W: pycodestyle, F: pyflakes, I: isort, B: bugbear, UP: pyupgrade,
+# C4: comprehensions, SIM: simplify. Keep this green in CI.
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+    "B008",  # function calls in argument defaults (Click/Typer idiom)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

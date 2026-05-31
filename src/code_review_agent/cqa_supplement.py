@@ -37,11 +37,16 @@ def _safe_parse(path: str) -> ast.AST | None:
 # Switch Statements (long if/elif chains)
 # ---------------------------------------------------------------------------
 
+
 def _elif_children(tree: ast.AST) -> set[int]:
     """Ids of If nodes that are the ``elif`` continuation of another If."""
     children: set[int] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.If) and len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
+        if (
+            isinstance(node, ast.If)
+            and len(node.orelse) == 1
+            and isinstance(node.orelse[0], ast.If)
+        ):
             children.add(id(node.orelse[0]))
     return children
 
@@ -75,23 +80,26 @@ def supplemental_switch_smells(py_files: list, file_threshold: int) -> list[dict
                 continue
             branches = _branch_count(node)
             if branches > threshold:
-                smells.append({
-                    "name": "Switch Statements",
-                    "description": (
-                        f"Complex conditional with {branches} branches at line "
-                        f"{node.lineno} in {path}"
-                    ),
-                    "file_path": path,
-                    "module_class": None,
-                    "line_number": node.lineno,
-                    "severity": "medium",
-                })
+                smells.append(
+                    {
+                        "name": "Switch Statements",
+                        "description": (
+                            f"Complex conditional with {branches} branches at line "
+                            f"{node.lineno} in {path}"
+                        ),
+                        "file_path": path,
+                        "module_class": None,
+                        "line_number": node.lineno,
+                        "severity": "medium",
+                    }
+                )
     return smells
 
 
 # ---------------------------------------------------------------------------
 # Deep Inheritance Tree (DIT)
 # ---------------------------------------------------------------------------
+
 
 def _base_simple_name(base: ast.expr) -> str | None:
     if isinstance(base, ast.Name):
@@ -143,20 +151,23 @@ def supplemental_dit_smells(py_files: list, dit_threshold: int) -> list[dict[str
         if dit > threshold:
             path, lineno = location.get(name, ("Unknown", 0))
             severity = "high" if dit > threshold * 1.5 else "medium"
-            smells.append({
-                "name": "Deep Inheritance Tree (DIT)",
-                "description": f"Class '{name}' has DIT of {dit} in {path}",
-                "file_path": path,
-                "module_class": name,
-                "line_number": lineno,
-                "severity": severity,
-            })
+            smells.append(
+                {
+                    "name": "Deep Inheritance Tree (DIT)",
+                    "description": f"Class '{name}' has DIT of {dit} in {path}",
+                    "file_path": path,
+                    "module_class": name,
+                    "line_number": lineno,
+                    "severity": severity,
+                }
+            )
     return smells
 
 
 # ---------------------------------------------------------------------------
 # De-duplication
 # ---------------------------------------------------------------------------
+
 
 def merge_dedup(existing: list, additions: list[dict]) -> list:
     """Append ``additions`` to ``existing``, dropping exact duplicate smells."""
@@ -165,7 +176,9 @@ def merge_dedup(existing: list, additions: list[dict]) -> list:
     seen: set[tuple] = set()
     for s in existing:
         if isinstance(s, dict):
-            seen.add((s.get("name"), s.get("file_path"), s.get("module_class"), s.get("line_number")))
+            seen.add(
+                (s.get("name"), s.get("file_path"), s.get("module_class"), s.get("line_number"))
+            )
     for s in additions:
         key = (s.get("name"), s.get("file_path"), s.get("module_class"), s.get("line_number"))
         if key not in seen:

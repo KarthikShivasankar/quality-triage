@@ -14,7 +14,6 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -23,10 +22,10 @@ SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 
 SEVERITY_EMOJI = {
     "critical": "🔴",
-    "high":     "🟠",
-    "medium":   "🟡",
-    "low":      "🟢",
-    "info":     "🔵",
+    "high": "🟠",
+    "medium": "🟡",
+    "low": "🟢",
+    "info": "🔵",
 }
 
 
@@ -34,12 +33,13 @@ SEVERITY_EMOJI = {
 # Data model
 # ---------------------------------------------------------------------------
 
+
 class Severity(str, Enum):
     CRITICAL = "critical"
-    HIGH     = "high"
-    MEDIUM   = "medium"
-    LOW      = "low"
-    INFO     = "info"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
 
 
 @dataclass
@@ -48,8 +48,8 @@ class Finding:
     tool: str
     category: str
     severity: Severity
-    file: str             # relative path
-    file_abs: str         # absolute path
+    file: str  # relative path
+    file_abs: str  # absolute path
     line: int
     col: int | None
     end_line: int | None = None
@@ -82,18 +82,18 @@ class ReportData:
 # ---------------------------------------------------------------------------
 
 _SEVERITY_ML = {
-    "data_leakage":        Severity.CRITICAL,
+    "data_leakage": Severity.CRITICAL,
     "missing_random_seed": Severity.CRITICAL,
-    "reproducibility":     Severity.CRITICAL,
+    "reproducibility": Severity.CRITICAL,
 }
 
 _SEVERITY_STR = {
     "critical": Severity.CRITICAL,
-    "high":     Severity.HIGH,
-    "medium":   Severity.MEDIUM,
-    "low":      Severity.LOW,
-    "info":     Severity.INFO,
-    "":         Severity.MEDIUM,
+    "high": Severity.HIGH,
+    "medium": Severity.MEDIUM,
+    "low": Severity.LOW,
+    "info": Severity.INFO,
+    "": Severity.MEDIUM,
 }
 
 
@@ -148,30 +148,33 @@ class FindingNormalizer:
         line_val = smell.get("line_number")
         if line_val is None and smell.get("location"):
             import re as _re
+
             m = _re.search(r"\d+", str(smell["location"]))
             line_val = int(m.group()) if m else 0
         line = int(line_val or 0)
         sev_key = name.lower().replace(" ", "_")
         sev = _SEVERITY_ML.get(sev_key, Severity.HIGH)
-        out.append(Finding(
-            finding_id=self._next_id(prefix),
-            tool="ml_smells",
-            category=name,
-            severity=sev,
-            file=_rel(fp, self.root),
-            file_abs=str(fp),
-            line=line,
-            col=smell.get("col"),
-            symbol=None,
-            message=smell.get("description") or smell.get("smell") or name,
-            how_to_fix=smell.get("how_to_fix") or smell.get("fix"),
-            code_snippet=smell.get("code_snippet"),
-            framework=smell.get("framework"),
-            extra={
-                "benefits": smell.get("benefits", ""),
-                "strategies": smell.get("strategies", ""),
-            },
-        ))
+        out.append(
+            Finding(
+                finding_id=self._next_id(prefix),
+                tool="ml_smells",
+                category=name,
+                severity=sev,
+                file=_rel(fp, self.root),
+                file_abs=str(fp),
+                line=line,
+                col=smell.get("col"),
+                symbol=None,
+                message=smell.get("description") or smell.get("smell") or name,
+                how_to_fix=smell.get("how_to_fix") or smell.get("fix"),
+                code_snippet=smell.get("code_snippet"),
+                framework=smell.get("framework"),
+                extra={
+                    "benefits": smell.get("benefits", ""),
+                    "strategies": smell.get("strategies", ""),
+                },
+            )
+        )
 
     # ---- Python smells ----------------------------------------------------
 
@@ -213,20 +216,22 @@ class FindingNormalizer:
         line = int(smell.get("line_number", 0) or 0)
         sev_raw = str(smell.get("severity", "medium") or "medium").lower()
         sev = _SEVERITY_STR.get(sev_raw, Severity.MEDIUM)
-        out.append(Finding(
-            finding_id=self._next_id(prefix),
-            tool="python_smells",
-            category=name,
-            severity=sev,
-            file=_rel(fp, self.root) if fp else "",
-            file_abs=str(fp),
-            line=line,
-            col=None,
-            symbol=smell.get("module_class"),
-            message=smell.get("description", name),
-            how_to_fix=smell.get("how_to_fix"),
-            code_snippet=smell.get("code_snippet"),
-        ))
+        out.append(
+            Finding(
+                finding_id=self._next_id(prefix),
+                tool="python_smells",
+                category=name,
+                severity=sev,
+                file=_rel(fp, self.root) if fp else "",
+                file_abs=str(fp),
+                line=line,
+                col=None,
+                symbol=smell.get("module_class"),
+                message=smell.get("description", name),
+                how_to_fix=smell.get("how_to_fix"),
+                code_snippet=smell.get("code_snippet"),
+            )
+        )
 
     # ---- TD classifier ----------------------------------------------------
 
@@ -247,13 +252,15 @@ class FindingNormalizer:
             if not isinstance(pred, dict):
                 continue
             if pred.get("error"):
-                out.append({
-                    "text": pred.get("text", ""),
-                    "category": run_label,
-                    "confidence": 0.0,
-                    "predicted_class": pred.get("predicted_class"),
-                    "error": pred.get("error"),
-                })
+                out.append(
+                    {
+                        "text": pred.get("text", ""),
+                        "category": run_label,
+                        "confidence": 0.0,
+                        "predicted_class": pred.get("predicted_class"),
+                        "error": pred.get("error"),
+                    }
+                )
                 continue
             cls = pred.get("predicted_class")
             try:
@@ -263,19 +270,22 @@ class FindingNormalizer:
             if cls_int != 1:
                 continue  # class 0 → no debt of this category
             prob = pred.get("predicted_probability", 0.0)
-            out.append({
-                "text": pred.get("text", ""),
-                "category": run_label,
-                "confidence": round(float(prob or 0.0), 3),
-                "predicted_class": cls_int,
-                "error": None,
-            })
+            out.append(
+                {
+                    "text": pred.get("text", ""),
+                    "category": run_label,
+                    "confidence": round(float(prob or 0.0), 3),
+                    "predicted_class": cls_int,
+                    "error": None,
+                }
+            )
         return out
 
 
 # ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
+
 
 class ReportRenderer:
     def __init__(self, include_code_snippets: bool = True, max_snippet_lines: int = 10):
@@ -304,7 +314,7 @@ class ReportRenderer:
         w("")
 
         # --- Severity breakdown ---
-        by_sev = {s: 0 for s in SEVERITY_ORDER}
+        by_sev = dict.fromkeys(SEVERITY_ORDER, 0)
         for f in data.findings:
             by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
 
@@ -362,7 +372,9 @@ class ReportRenderer:
                 loc_str = f"{f.line}" + (f":{f.col}" if f.col else "")
                 sym = f"`{f.symbol}`" if f.symbol else "—"
                 msg = f.message[:80] + "…" if len(f.message) > 80 else f.message
-                w(f"| {f.finding_id} | {SEVERITY_EMOJI[f.severity.value]} | {loc_str} | {f.category} | {sym} | {msg} |")
+                w(
+                    f"| {f.finding_id} | {SEVERITY_EMOJI[f.severity.value]} | {loc_str} | {f.category} | {sym} | {msg} |"
+                )
             w("")
 
         # --- Technical Debt snippets ---
@@ -376,7 +388,9 @@ class ReportRenderer:
                 w("| Snippet | Category | Confidence |")
                 w("|---------|----------|------------|")
                 for p in sorted(high_conf, key=lambda x: -x["confidence"]):
-                    text_short = p["text"][:80].replace("|", "\\|") + ("…" if len(p["text"]) > 80 else "")
+                    text_short = p["text"][:80].replace("|", "\\|") + (
+                        "…" if len(p["text"]) > 80 else ""
+                    )
                     w(f"| {text_short} | {p['category']} | {p['confidence']:.0%} |")
                 w("")
 
@@ -386,9 +400,11 @@ class ReportRenderer:
             w("")
             s = data.intel_summary
             w(f"**Files:** {s.get('files_analyzed', '?')}  ")
-            w(f"**Symbols:** {s.get('total_symbols', '?')} "
-              f"({s.get('total_functions', '?')} functions, "
-              f"{s.get('total_classes', '?')} classes)  ")
+            w(
+                f"**Symbols:** {s.get('total_symbols', '?')} "
+                f"({s.get('total_functions', '?')} functions, "
+                f"{s.get('total_classes', '?')} classes)  "
+            )
             if s.get("parse_errors"):
                 w(f"**Parse errors:** {len(s['parse_errors'])} files could not be parsed  ")
             w("")
@@ -402,11 +418,15 @@ class ReportRenderer:
                 for h in hotspots:
                     parent = f"{h['parent_class']}." if h.get("parent_class") else ""
                     loc_str = f"{h['file']}:{h['line']}:{h['col']}"
-                    w(f"| `{parent}{h['name']}` | `{loc_str}` | {h['line']} | **{h['cyclomatic_complexity']}** | {h['loc']} | {h['param_count']} | {h['nesting_depth']} |")
+                    w(
+                        f"| `{parent}{h['name']}` | `{loc_str}` | {h['line']} | **{h['cyclomatic_complexity']}** | {h['loc']} | {h['param_count']} | {h['nesting_depth']} |"
+                    )
                 w("")
 
         w("---")
-        w("*Generated by code-review-agent v0.2.0*")
+        from code_review_agent import __version__
+
+        w(f"*Generated by quality-triage v{__version__}*")
         return "\n".join(lines)
 
     def _render_finding(self, f: Finding, lines: list[str]):
@@ -417,13 +437,15 @@ class ReportRenderer:
         lines.append(f"**Location:** `{loc}`  ")
         if f.framework:
             lines.append(f"**Framework:** {f.framework}  ")
-        lines.append(f"**Severity:** {SEVERITY_EMOJI[f.severity.value]} {f.severity.value.upper()}  ")
+        lines.append(
+            f"**Severity:** {SEVERITY_EMOJI[f.severity.value]} {f.severity.value.upper()}  "
+        )
         lines.append("")
         if f.message:
             lines.append(f"{f.message}")
             lines.append("")
         if self.include_code_snippets and f.code_snippet:
-            snippet = "\n".join(f.code_snippet.splitlines()[:self.max_snippet_lines])
+            snippet = "\n".join(f.code_snippet.splitlines()[: self.max_snippet_lines])
             lines.append("```python")
             lines.append(snippet)
             lines.append("```")
@@ -468,6 +490,7 @@ class ReportRenderer:
 # ---------------------------------------------------------------------------
 # Report builder
 # ---------------------------------------------------------------------------
+
 
 def build_report(
     target: str,

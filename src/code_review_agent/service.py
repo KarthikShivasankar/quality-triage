@@ -20,8 +20,10 @@ def resolve_selection(cfg, checks, td_categories) -> dict[str, Any]:
     raw_checks = list(checks) if checks else list(getattr(cfg.review, "checks", []) or [])
     families = selection.resolve_families(raw_checks)
 
-    raw_cats = list(td_categories) if td_categories else list(
-        getattr(cfg.review, "td_categories", []) or []
+    raw_cats = (
+        list(td_categories)
+        if td_categories
+        else list(getattr(cfg.review, "td_categories", []) or [])
     )
     cats, unknown = selection.resolve_td_categories(raw_cats)
     return {
@@ -109,4 +111,5 @@ def run_review(
 def known_td_categories() -> list[str]:
     """Primary TD category keys for UI dropdowns."""
     from code_review_agent.tools import TD_PRIMARY_CATEGORIES
+
     return list(TD_PRIMARY_CATEGORIES)

@@ -24,7 +24,7 @@ from typing import Any
 
 _INSTALL_HINT = (
     "The web UI needs FastAPI + Uvicorn. Install them with:\n"
-    "  uv sync --extra web   (or  pip install \"code-review-agent[web]\")"
+    '  uv sync --extra web   (or  pip install "quality-triage[web]")'
 )
 
 
@@ -109,33 +109,37 @@ def _selection_html(sel: dict) -> str:
     skipped = "".join(f'<span class="pill skip">{_esc(f)} skipped</span>' for f in sel["skipped"])
     cats = ""
     if "td" in sel["families"]:
-        cats = "<div>TD categories: " + "".join(
-            f'<span class="pill">{_esc(c)}</span>' for c in sel["td_categories"]
-        ) + "</div>"
-    return f'<div>{fams}{skipped}</div>{cats}'
+        cats = (
+            "<div>TD categories: "
+            + "".join(f'<span class="pill">{_esc(c)}</span>' for c in sel["td_categories"])
+            + "</div>"
+        )
+    return f"<div>{fams}{skipped}</div>{cats}"
 
 
 def _fixes_html(target: str, fixes: list[dict], outcome: dict | None) -> str:
     if not fixes:
         return '<p class="muted">No machine-applicable fix blocks were produced.</p>'
-    parts = [f"<p>{len(fixes)} fix suggestion(s). Diffs below are a preview — nothing was written.</p>"]
+    parts = [
+        f"<p>{len(fixes)} fix suggestion(s). Diffs below are a preview — nothing was written.</p>"
+    ]
     diffs = (outcome or {}).get("diffs", [])
     for i, fx in enumerate(fixes):
         diff_text = diffs[i]["diff"] if i < len(diffs) else ""
         parts.append(
-            f'<h4>Fix {i + 1}: {_esc(fx.get("description") or fx.get("file"))}</h4>'
+            f"<h4>Fix {i + 1}: {_esc(fx.get('description') or fx.get('file'))}</h4>"
             f'<div class="muted">{_esc(fx.get("file"))} lines {_esc(fx.get("start_line"))}-{_esc(fx.get("end_line"))}</div>'
             f'<pre class="diff">{_esc(diff_text)}</pre>'
         )
     # Gated apply form — re-sends the parsed fixes; the server enforces root + confirm.
     parts.append(
         '<form method="post" action="/fixes/apply" '
-        'onsubmit="return confirm(\'Apply these fixes to files on disk?\');">'
+        "onsubmit=\"return confirm('Apply these fixes to files on disk?');\">"
         f'<input type="hidden" name="target" value="{_esc(target)}">'
         f'<input type="hidden" name="fixes_json" value=\'{_esc(json.dumps(fixes))}\'>'
         '<input type="hidden" name="confirm" value="1">'
         '<button type="submit" class="danger">Apply fixes (writes files, makes .bak backups)</button>'
-        '</form>'
+        "</form>"
     )
     return "".join(parts)
 
@@ -194,19 +198,22 @@ def create_app(config_path: str | None = None):
             outcome = apply_fixes(result["fix_objects"], target, dry_run=True, confirm=False)
 
         if fmt == "json":
-            return JSONResponse({
-                "target": target,
-                "selection": {k: sel[k] for k in ("families", "skipped", "td_categories")},
-                "report_markdown": result["text"],
-                "fixes": result["fixes"],
-                "fix_preview": outcome,
-            })
+            return JSONResponse(
+                {
+                    "target": target,
+                    "selection": {k: sel[k] for k in ("families", "skipped", "td_categories")},
+                    "report_markdown": result["text"],
+                    "fixes": result["fixes"],
+                    "fix_preview": outcome,
+                }
+            )
 
         body = (
             '<p><a href="/">&larr; New review</a></p>'
             f"<h1>Report: {_esc(target)}</h1>"
-            "<h3>Selection</h3>" + _selection_html(sel) +
-            f"<h3>Report</h3><pre>{_esc(result['text'])}</pre>"
+            "<h3>Selection</h3>"
+            + _selection_html(sel)
+            + f"<h3>Report</h3><pre>{_esc(result['text'])}</pre>"
             "<h3>Suggested Fixes</h3>" + _fixes_html(target, result["fixes"], outcome)
         )
         return _page(body, title=f"Report — {target}")
@@ -231,7 +238,8 @@ def create_app(config_path: str | None = None):
                 description=d.get("description", ""),
                 finding_id=d.get("finding_id"),
             )
-            for d in raw if isinstance(d, dict)
+            for d in raw
+            if isinstance(d, dict)
         ]
         # Apply only with explicit confirmation; the engine also confines writes
         # to the target project root.
@@ -239,7 +247,8 @@ def create_app(config_path: str | None = None):
         counts = outcome.get("counts", {})
         rows = "".join(
             f"<li>{_esc(a.get('file'))} lines {_esc(a.get('lines'))} "
-            f"(backup {_esc(a.get('backup'))})</li>" for a in outcome.get("applied", [])
+            f"(backup {_esc(a.get('backup'))})</li>"
+            for a in outcome.get("applied", [])
         )
         skip_rows = "".join(
             f"<li class='muted'>{_esc(s.get('file'))}: {_esc(s.get('reason'))}</li>"
@@ -265,6 +274,7 @@ def main() -> None:
         import uvicorn
     except ImportError:
         import sys
+
         print(_INSTALL_HINT, file=sys.stderr)
         sys.exit(1)
 

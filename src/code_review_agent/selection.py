@@ -68,7 +68,9 @@ def skipped_families(families: list[str]) -> list[str]:
     return [f for f in ALL_FAMILIES if f not in selected]
 
 
-def resolve_td_categories(values: list[str] | tuple[str, ...] | None) -> tuple[list[str], list[str]]:
+def resolve_td_categories(
+    values: list[str] | tuple[str, ...] | None,
+) -> tuple[list[str], list[str]]:
     """Return (valid_categories, unknown_categories). Empty/None → ['general']."""
     if not values:
         return ["general"], []
@@ -145,16 +147,18 @@ def selection_note(
     pa = python_analysis_type(selected)
     if pa and pa != "all":
         lines.append("")
-        lines.append(
-            f"When calling `detect_python_smells`, use analysis_type=\"{pa}\"."
-        )
-    elif {"code", "architectural", "structural"} & set(selected) and pa == "all" and \
-            len([f for f in ("code", "architectural", "structural") if f in selected]) < 3:
+        lines.append(f'When calling `detect_python_smells`, use analysis_type="{pa}".')
+    elif (
+        {"code", "architectural", "structural"} & set(selected)
+        and pa == "all"
+        and len([f for f in ("code", "architectural", "structural") if f in selected]) < 3
+    ):
         keep = [f for f in ("code", "architectural", "structural") if f in selected]
         lines.append("")
         lines.append(
-            "Only report these python-smell categories: " + ", ".join(keep) +
-            " (ignore the other python-smell categories even if the detector returns them)."
+            "Only report these python-smell categories: "
+            + ", ".join(keep)
+            + " (ignore the other python-smell categories even if the detector returns them)."
         )
 
     if skipped:
@@ -167,6 +171,7 @@ def selection_note(
 
     if include_fix_instructions:
         from code_review_agent.fixes import FIX_BLOCK_INSTRUCTIONS
+
         lines.append("")
         lines.append(FIX_BLOCK_INSTRUCTIONS)
 

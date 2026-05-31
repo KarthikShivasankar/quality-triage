@@ -12,7 +12,7 @@ Exposes the analysis tools over stdio so ANY MCP-capable harness
 The ``mcp`` SDK is imported lazily so importing this module never fails when
 the optional extra is not installed. Install with::
 
-    uv sync --extra mcp        # or:  pip install "code-review-agent[mcp]"
+    uv sync --extra mcp        # or:  pip install "quality-triage[mcp]"
 
 Run with::
 
@@ -29,7 +29,7 @@ from code_review_agent import tools as _tools
 
 _INSTALL_HINT = (
     "The 'mcp' package is required to run the MCP server.\n"
-    "Install it with:  uv sync --extra mcp   (or  pip install \"code-review-agent[mcp]\")"
+    'Install it with:  uv sync --extra mcp   (or  pip install "quality-triage[mcp]")'
 )
 
 
@@ -127,8 +127,12 @@ def build_server():
         """
         return _result_text(
             _tools.classify_technical_debt_ensemble(
-                texts, model_names=model_names, categories=categories,
-                weights=weights, device=device, backend=backend,
+                texts,
+                model_names=model_names,
+                categories=categories,
+                weights=weights,
+                device=device,
+                backend=backend,
             )
         )
 

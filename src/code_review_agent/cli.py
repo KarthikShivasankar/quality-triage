@@ -14,6 +14,7 @@ Commands:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -41,10 +42,8 @@ def _force_utf8_streams() -> None:
         stream = getattr(sys, stream_name, None)
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
-            try:
+            with contextlib.suppress(Exception):
                 reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
 
 
 _force_utf8_streams()
@@ -60,8 +59,10 @@ SEVERITY_CHOICE = click.Choice(["critical", "high", "medium", "low", "info"])
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_cfg(config_path: str | None):
     from code_review_agent.config import get_config, reset_config
+
     reset_config()
     return get_config(config_path)
 
@@ -76,7 +77,9 @@ def _model_for_provider(cfg, provider, model_override):
     return cfg.ollama.model
 
 
-def _make_agent(cfg, provider_override=None, model_override=None, base_url=None, api_key=None, families=None):
+def _make_agent(
+    cfg, provider_override=None, model_override=None, base_url=None, api_key=None, families=None
+):
     from code_review_agent.config import resolve_api_key
     from code_review_agent.service import build_agent
 
@@ -84,13 +87,17 @@ def _make_agent(cfg, provider_override=None, model_override=None, base_url=None,
 
     # Friendly pre-flight key checks (the agent also raises, but we want a clean message).
     if provider == "anthropic":
-        key = api_key or resolve_api_key(cfg.anthropic.api_key, cfg.anthropic.api_key_env, "ANTHROPIC_API_KEY")
+        key = api_key or resolve_api_key(
+            cfg.anthropic.api_key, cfg.anthropic.api_key_env, "ANTHROPIC_API_KEY"
+        )
         if not key:
             console.print("[red]Error:[/red] ANTHROPIC_API_KEY not set.")
             console.print("  Use Ollama instead: [cyan]--provider ollama[/cyan]")
             sys.exit(1)
     elif provider == "openai":
-        key = api_key or resolve_api_key(cfg.openai.api_key, cfg.openai.api_key_env, "OPENAI_API_KEY")
+        key = api_key or resolve_api_key(
+            cfg.openai.api_key, cfg.openai.api_key_env, "OPENAI_API_KEY"
+        )
         if not key:
             console.print(
                 f"[red]Error:[/red] no API key for the 'openai' provider "
@@ -101,8 +108,11 @@ def _make_agent(cfg, provider_override=None, model_override=None, base_url=None,
 
     model = _model_for_provider(cfg, provider, model_override)
     resolved_base = base_url or (
-        cfg.openai.base_url if provider == "openai"
-        else cfg.ollama.base_url if provider == "ollama" else None
+        cfg.openai.base_url
+        if provider == "openai"
+        else cfg.ollama.base_url
+        if provider == "ollama"
+        else None
     )
     sel_note = f"  Checks: [bold]{','.join(families)}[/bold]" if families else ""
     console.print(
@@ -112,8 +122,12 @@ def _make_agent(cfg, provider_override=None, model_override=None, base_url=None,
         + "[/dim]"
     )
     return build_agent(
-        cfg, provider, model_override, families,
-        base_url=base_url, api_key=api_key,
+        cfg,
+        provider,
+        model_override,
+        families,
+        base_url=base_url,
+        api_key=api_key,
     )
 
 
@@ -139,10 +153,12 @@ def _stream(agent, gen_fn, *args, output_path=None, **kwargs):
 # Main group
 # ---------------------------------------------------------------------------
 
+
 @click.group()
-@click.version_option(package_name="code-review-agent")
+@click.version_option(package_name="quality-triage")
 @click.option(
-    "--config", "-C",
+    "--config",
+    "-C",
     default=None,
     metavar="PATH",
     help="Path to config.yaml (default: ./config.yaml)",
@@ -172,34 +188,84 @@ def main(ctx, config):
 # review
 # ---------------------------------------------------------------------------
 
+
 @main.command()
-@click.argument("target")   # local path OR GitHub URL
+@click.argument("target")  # local path OR GitHub URL
 @click.option("--context", "-c", default="", help="Extra context / focus areas")
 @click.option("--output", "-o", default=None, help="Save report to file")
 @click.option("--provider", "-p", type=PROVIDER_CHOICE, default=None)
 @click.option("--model", "-m", default=None, help="Override model name")
 @click.option("--base-url", default=None, help="Override base URL (openai/ollama providers)")
 @click.option("--api-key", default=None, help="Override API key (openai/anthropic providers)")
-@click.option("--check", "-k", "checks", multiple=True, type=FAMILY_CHOICE,
-              help="Detector families to run (repeatable). Default: config / all.")
-@click.option("--td-category", "td_categories", multiple=True,
-              help="TD categories to classify (repeatable). Default: config / general.")
-@click.option("--min-severity", type=SEVERITY_CHOICE, default=None,
-              help="Ask the report to focus on findings at or above this severity.")
-@click.option("--format", "fmt", type=click.Choice(["markdown", "json"]), default=None,
-              help="Saved output format (default: markdown).")
-@click.option("--suggest-fixes", is_flag=True, default=False,
-              help="Ask the agent for machine-applicable fix blocks (suggest-only).")
-@click.option("--fix-dry-run", is_flag=True, default=False,
-              help="Show fix diffs without writing (implies --suggest-fixes).")
-@click.option("--apply-fixes", is_flag=True, default=False,
-              help="Apply parsed fixes (requires confirmation; implies --suggest-fixes).")
-@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the apply confirmation prompt.")
+@click.option(
+    "--check",
+    "-k",
+    "checks",
+    multiple=True,
+    type=FAMILY_CHOICE,
+    help="Detector families to run (repeatable). Default: config / all.",
+)
+@click.option(
+    "--td-category",
+    "td_categories",
+    multiple=True,
+    help="TD categories to classify (repeatable). Default: config / general.",
+)
+@click.option(
+    "--min-severity",
+    type=SEVERITY_CHOICE,
+    default=None,
+    help="Ask the report to focus on findings at or above this severity.",
+)
+@click.option(
+    "--format",
+    "fmt",
+    type=click.Choice(["markdown", "json"]),
+    default=None,
+    help="Saved output format (default: markdown).",
+)
+@click.option(
+    "--suggest-fixes",
+    is_flag=True,
+    default=False,
+    help="Ask the agent for machine-applicable fix blocks (suggest-only).",
+)
+@click.option(
+    "--fix-dry-run",
+    is_flag=True,
+    default=False,
+    help="Show fix diffs without writing (implies --suggest-fixes).",
+)
+@click.option(
+    "--apply-fixes",
+    is_flag=True,
+    default=False,
+    help="Apply parsed fixes (requires confirmation; implies --suggest-fixes).",
+)
+@click.option(
+    "--yes", "-y", is_flag=True, default=False, help="Skip the apply confirmation prompt."
+)
 @click.option("--keep-clone", is_flag=True, default=False, help="Keep cloned GitHub repo")
 @click.pass_context
-def review(ctx, target, context, output, provider, model, base_url, api_key,
-           checks, td_categories, min_severity, fmt, suggest_fixes, fix_dry_run,
-           apply_fixes, yes, keep_clone):
+def review(
+    ctx,
+    target,
+    context,
+    output,
+    provider,
+    model,
+    base_url,
+    api_key,
+    checks,
+    td_categories,
+    min_severity,
+    fmt,
+    suggest_fixes,
+    fix_dry_run,
+    apply_fixes,
+    yes,
+    keep_clone,
+):
     """Full AI code review on a local PATH or GitHub URL.
 
     \b
@@ -215,7 +281,8 @@ def review(ctx, target, context, output, provider, model, base_url, api_key,
     from code_review_agent import service
 
     # Handle GitHub URLs
-    from code_review_agent.github_utils import is_github_url, clone_repo, cleanup_repo
+    from code_review_agent.github_utils import cleanup_repo, clone_repo, is_github_url
+
     cloned = None
     if is_github_url(target):
         console.print(f"[cyan]Cloning:[/cyan] {target}")
@@ -225,7 +292,9 @@ def review(ctx, target, context, output, provider, model, base_url, api_key,
                 depth=cfg.github.depth,
                 timeout=cfg.github.timeout,
             )
-            console.print(f"[green]Cloned to:[/green] {cloned.local_path}  (commit {cloned.commit_sha[:8]})")
+            console.print(
+                f"[green]Cloned to:[/green] {cloned.local_path}  (commit {cloned.commit_sha[:8]})"
+            )
             review_path = cloned.local_path
         except Exception as e:
             console.print(f"[red]Clone failed:[/red] {e}")
@@ -239,26 +308,38 @@ def review(ctx, target, context, output, provider, model, base_url, api_key,
     # Resolve the analysis selection and build the prompt context.
     sel = service.resolve_selection(cfg, list(checks), list(td_categories))
     if sel["unknown_td_categories"]:
-        console.print(f"[yellow]Ignoring unknown TD categories:[/yellow] {sel['unknown_td_categories']}")
+        console.print(
+            f"[yellow]Ignoring unknown TD categories:[/yellow] {sel['unknown_td_categories']}"
+        )
     fmt = fmt or cfg.review.output_format
     want_fixes = suggest_fixes or fix_dry_run or apply_fixes or cfg.review.suggest_fixes
 
     user_ctx = context
     if min_severity:
-        user_ctx = (user_ctx + f"\nFocus on findings at severity {min_severity.upper()} or higher.").strip()
+        user_ctx = (
+            user_ctx + f"\nFocus on findings at severity {min_severity.upper()} or higher."
+        ).strip()
     extra_context = service.review_context(user_ctx, sel, want_fixes)
 
-    agent = _make_agent(cfg, provider, model, base_url=base_url, api_key=api_key, families=sel["families"])
+    agent = _make_agent(
+        cfg, provider, model, base_url=base_url, api_key=api_key, families=sel["families"]
+    )
 
-    console.print(Panel(
-        f"[bold cyan]Code Review[/bold cyan]\n"
-        f"Target: [green]{target}[/green]\n"
-        f"Path:   [dim]{review_path}[/dim]\n"
-        f"Checks: [yellow]{', '.join(sel['families'])}[/yellow]"
-        + (f"   Skipped: [dim]{', '.join(sel['skipped'])}[/dim]" if sel['skipped'] else "")
-        + (f"\nTD categories: [yellow]{', '.join(sel['td_categories'])}[/yellow]" if 'td' in sel['families'] else ""),
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]Code Review[/bold cyan]\n"
+            f"Target: [green]{target}[/green]\n"
+            f"Path:   [dim]{review_path}[/dim]\n"
+            f"Checks: [yellow]{', '.join(sel['families'])}[/yellow]"
+            + (f"   Skipped: [dim]{', '.join(sel['skipped'])}[/dim]" if sel["skipped"] else "")
+            + (
+                f"\nTD categories: [yellow]{', '.join(sel['td_categories'])}[/yellow]"
+                if "td" in sel["families"]
+                else ""
+            ),
+            expand=False,
+        )
+    )
     console.print()
 
     start = time.time()
@@ -266,7 +347,9 @@ def review(ctx, target, context, output, provider, model, base_url, api_key,
     try:
         # Markdown: stream to the file directly. JSON: capture, then write wrapped.
         stream_output = output if (fmt == "markdown") else None
-        text = _stream(agent, agent.review, review_path, extra_context=extra_context, output_path=stream_output)
+        text = _stream(
+            agent, agent.review, review_path, extra_context=extra_context, output_path=stream_output
+        )
     finally:
         if cloned and not keep_clone:
             cleanup_repo(cloned)
@@ -280,12 +363,13 @@ def review(ctx, target, context, output, provider, model, base_url, api_key,
     if fmt == "json" and output:
         _save_review_json(output, target, sel, text, fixes_payload)
 
-    console.print(f"\n[dim]Finished in {time.time()-start:.1f}s[/dim]")
+    console.print(f"\n[dim]Finished in {time.time() - start:.1f}s[/dim]")
 
 
 def _handle_review_fixes(text: str, project_root: str, mode: str, assume_yes: bool):
     """Parse fix blocks from the review text and preview/apply them safely."""
-    from code_review_agent.fixes import apply_fixes as _apply, parse_fix_blocks, render_fixes_markdown
+    from code_review_agent.fixes import apply_fixes as _apply
+    from code_review_agent.fixes import parse_fix_blocks, render_fixes_markdown
 
     suggestions = parse_fix_blocks(text)
     if not suggestions:
@@ -304,7 +388,9 @@ def _handle_review_fixes(text: str, project_root: str, mode: str, assume_yes: bo
         outcome = _apply(suggestions, project_root, dry_run=True, confirm=False)
 
     for d in outcome.get("diffs", []):
-        console.print(f"\n[yellow]{d['file']}[/yellow] (lines {d['lines']}) — {d.get('description', '')}")
+        console.print(
+            f"\n[yellow]{d['file']}[/yellow] (lines {d['lines']}) — {d.get('description', '')}"
+        )
         if d.get("diff"):
             syntax = Syntax(d["diff"], "diff", theme="monokai")
             console.print(syntax)
@@ -344,6 +430,7 @@ def _save_review_json(output, target, sel, text, fixes_payload):
 # ask
 # ---------------------------------------------------------------------------
 
+
 @main.command()
 @click.argument("question")
 @click.option("--output", "-o", default=None)
@@ -364,6 +451,7 @@ def ask(ctx, question, output, provider, model, base_url, api_key):
 # analyze-file
 # ---------------------------------------------------------------------------
 
+
 @main.command("analyze-file")
 @click.argument("file_path", type=click.Path(exists=True))
 @click.option("--output", "-o", default=None)
@@ -371,34 +459,64 @@ def ask(ctx, question, output, provider, model, base_url, api_key):
 @click.option("--model", "-m", default=None)
 @click.option("--base-url", default=None, help="Override base URL (openai/ollama providers)")
 @click.option("--api-key", default=None, help="Override API key (openai/anthropic providers)")
-@click.option("--check", "-k", "checks", multiple=True, type=FAMILY_CHOICE,
-              help="Detector families to run (repeatable). Default: all.")
-@click.option("--td-category", "td_categories", multiple=True,
-              help="TD categories to classify (repeatable).")
-@click.option("--suggest-fixes", is_flag=True, default=False, help="Ask for machine-applicable fixes.")
+@click.option(
+    "--check",
+    "-k",
+    "checks",
+    multiple=True,
+    type=FAMILY_CHOICE,
+    help="Detector families to run (repeatable). Default: all.",
+)
+@click.option(
+    "--td-category", "td_categories", multiple=True, help="TD categories to classify (repeatable)."
+)
+@click.option(
+    "--suggest-fixes", is_flag=True, default=False, help="Ask for machine-applicable fixes."
+)
 @click.option("--fix-dry-run", is_flag=True, default=False, help="Show fix diffs without writing.")
-@click.option("--apply-fixes", is_flag=True, default=False, help="Apply fixes (requires confirmation).")
-@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the apply confirmation prompt.")
+@click.option(
+    "--apply-fixes", is_flag=True, default=False, help="Apply fixes (requires confirmation)."
+)
+@click.option(
+    "--yes", "-y", is_flag=True, default=False, help="Skip the apply confirmation prompt."
+)
 @click.pass_context
-def analyze_file(ctx, file_path, output, provider, model, base_url, api_key,
-                 checks, td_categories, suggest_fixes, fix_dry_run, apply_fixes, yes):
+def analyze_file(
+    ctx,
+    file_path,
+    output,
+    provider,
+    model,
+    base_url,
+    api_key,
+    checks,
+    td_categories,
+    suggest_fixes,
+    fix_dry_run,
+    apply_fixes,
+    yes,
+):
     """Deep-dive review of a single Python file."""
     cfg = _load_cfg(ctx.obj.get("config_path"))
     from code_review_agent import service
 
     sel = service.resolve_selection(cfg, list(checks), list(td_categories))
     want_fixes = suggest_fixes or fix_dry_run or apply_fixes
-    agent = _make_agent(cfg, provider, model, base_url=base_url, api_key=api_key, families=sel["families"])
+    agent = _make_agent(
+        cfg, provider, model, base_url=base_url, api_key=api_key, families=sel["families"]
+    )
     abs_path = str(Path(file_path).resolve())
     prompt = (
         f"Perform a detailed code review of `{abs_path}` with exact line:col references."
         "\n\n" + service.review_context("", sel, want_fixes)
     )
-    console.print(Panel(
-        f"[bold cyan]File Review[/bold cyan]\n[green]{abs_path}[/green]\n"
-        f"Checks: [yellow]{', '.join(sel['families'])}[/yellow]",
-        expand=False,
-    ))
+    console.print(
+        Panel(
+            f"[bold cyan]File Review[/bold cyan]\n[green]{abs_path}[/green]\n"
+            f"Checks: [yellow]{', '.join(sel['families'])}[/yellow]",
+            expand=False,
+        )
+    )
     console.print()
     text = _stream(agent, agent.ask, prompt, output_path=output if not want_fixes else None)
     if want_fixes:
@@ -414,6 +532,7 @@ def analyze_file(ctx, file_path, output, provider, model, base_url, api_key,
 # run-tool  (on-demand tool execution)
 # ---------------------------------------------------------------------------
 
+
 @main.group("run-tool")
 def run_tool():
     """On-demand execution of individual analysis tools."""
@@ -422,13 +541,19 @@ def run_tool():
 @run_tool.command("ml-smells")
 @click.argument("path", type=click.Path(exists=True))
 @click.option("--ignore", "-i", multiple=True, help="Dirs to ignore")
-@click.option("--min-severity", type=SEVERITY_CHOICE, default=None, help="Only show findings at/above this severity.")
+@click.option(
+    "--min-severity",
+    type=SEVERITY_CHOICE,
+    default=None,
+    help="Only show findings at/above this severity.",
+)
 @click.option("--output", "-o", default=None, help="Save JSON output to file")
 @click.option("--format", "fmt", type=click.Choice(["json", "table"]), default="table")
 @click.pass_context
 def tool_ml_smells(ctx, path, ignore, min_severity, output, fmt):
     """Detect ML-specific anti-patterns (data leakage, magic numbers, etc.)."""
     from code_review_agent.tools import detect_ml_smells
+
     _load_cfg(ctx.obj.get("config_path"))
 
     with console.status("[cyan]Running ML smell detector…[/cyan]"):
@@ -441,17 +566,27 @@ def tool_ml_smells(ctx, path, ignore, min_severity, output, fmt):
 
 @run_tool.command("python-smells")
 @click.argument("path", type=click.Path(exists=True))
-@click.option("--type", "analysis_type",
-              type=click.Choice(["code", "architectural", "structural", "all"]),
-              default="all", show_default=True)
+@click.option(
+    "--type",
+    "analysis_type",
+    type=click.Choice(["code", "architectural", "structural", "all"]),
+    default="all",
+    show_default=True,
+)
 @click.option("--ignore", "-i", multiple=True)
-@click.option("--min-severity", type=SEVERITY_CHOICE, default=None, help="Only show findings at/above this severity.")
+@click.option(
+    "--min-severity",
+    type=SEVERITY_CHOICE,
+    default=None,
+    help="Only show findings at/above this severity.",
+)
 @click.option("--output", "-o", default=None)
 @click.option("--format", "fmt", type=click.Choice(["json", "table"]), default="table")
 @click.pass_context
 def tool_python_smells(ctx, path, analysis_type, ignore, min_severity, output, fmt):
     """Detect code/architectural/structural Python code smells."""
     from code_review_agent.tools import detect_python_smells
+
     _load_cfg(ctx.obj.get("config_path"))
 
     with console.status(f"[cyan]Running Python smell detector ({analysis_type})…[/cyan]"):
@@ -468,9 +603,14 @@ def tool_python_smells(ctx, path, analysis_type, ignore, min_severity, output, f
 
 @run_tool.command("classify-td")
 @click.option("--text", "-t", multiple=True, help="Text snippet to classify (repeatable)")
-@click.option("--from-file", "from_file", type=click.Path(exists=True), help="File with one snippet per line")
-@click.option("--category", default=None,
-              help="Debt category: general (default), code, design, test, security, documentation, …")
+@click.option(
+    "--from-file", "from_file", type=click.Path(exists=True), help="File with one snippet per line"
+)
+@click.option(
+    "--category",
+    default=None,
+    help="Debt category: general (default), code, design, test, security, documentation, …",
+)
 @click.option("--model-path", default=None, help="HuggingFace model ID override")
 @click.option("--onnx-path", default=None, help="Local .onnx model path (skip download)")
 @click.option("--device", type=click.Choice(["cpu", "cuda", "mps"]), default=None)
@@ -486,6 +626,7 @@ def tool_classify_td(ctx, text, from_file, category, model_path, onnx_path, devi
       code-review run-tool classify-td --category security --from-file notes.txt
     """
     from code_review_agent.tools import classify_technical_debt
+
     _load_cfg(ctx.obj.get("config_path"))
 
     texts = list(text)
@@ -504,8 +645,11 @@ def tool_classify_td(ctx, text, from_file, category, model_path, onnx_path, devi
     )
     with console.status("[cyan]Classifying technical debt…[/cyan]"):
         result = classify_technical_debt(
-            texts, category=category, model_path=model_path,
-            onnx_path=onnx_path, device=device,
+            texts,
+            category=category,
+            model_path=model_path,
+            onnx_path=onnx_path,
+            device=device,
         )
 
     _print_tool_result(result, fmt, output, "Technical Debt Classification")
@@ -513,9 +657,15 @@ def tool_classify_td(ctx, text, from_file, category, model_path, onnx_path, devi
 
 @run_tool.command("classify-td-all")
 @click.option("--text", "-t", multiple=True, help="Text snippet to classify (repeatable)")
-@click.option("--from-file", "from_file", type=click.Path(exists=True), help="File with one snippet per line")
-@click.option("--category", "categories", multiple=True,
-              help="Restrict to these categories (repeatable); default: all 21")
+@click.option(
+    "--from-file", "from_file", type=click.Path(exists=True), help="File with one snippet per line"
+)
+@click.option(
+    "--category",
+    "categories",
+    multiple=True,
+    help="Restrict to these categories (repeatable); default: all 21",
+)
 @click.option("--device", type=click.Choice(["cpu", "cuda", "mps"]), default=None)
 @click.option("--output", "-o", default=None)
 @click.pass_context
@@ -527,6 +677,7 @@ def tool_classify_td_all(ctx, text, from_file, categories, device, output):
     of debt categories whose binary model fired (class==1).
     """
     from code_review_agent.tools import classify_technical_debt_all
+
     _load_cfg(ctx.obj.get("config_path"))
 
     texts = list(text)
@@ -542,22 +693,45 @@ def tool_classify_td_all(ctx, text, from_file, categories, device, output):
 
     console.print("[dim]Note: downloads one model per category on first run.[/dim]")
     with console.status("[cyan]Sweeping all TD categories…[/cyan]"):
-        result = classify_technical_debt_all(texts, categories=list(categories) or None, device=device)
+        result = classify_technical_debt_all(
+            texts, categories=list(categories) or None, device=device
+        )
     _print_tool_result(result, "json", output, "TD Multi-Category Sweep")
 
 
 @run_tool.command("classify-td-ensemble")
 @click.option("--text", "-t", multiple=True, help="Text snippet to classify (repeatable)")
-@click.option("--from-file", "from_file", type=click.Path(exists=True), help="File with one snippet per line")
-@click.option("--category", "categories", multiple=True, help="Category model to add to the ensemble (repeatable)")
-@click.option("--model", "model_names", multiple=True, help="HuggingFace model id to add (repeatable)")
-@click.option("--weight", "weights", multiple=True, type=float, help="Per-model weight (repeatable, matches model order)")
+@click.option(
+    "--from-file", "from_file", type=click.Path(exists=True), help="File with one snippet per line"
+)
+@click.option(
+    "--category",
+    "categories",
+    multiple=True,
+    help="Category model to add to the ensemble (repeatable)",
+)
+@click.option(
+    "--model", "model_names", multiple=True, help="HuggingFace model id to add (repeatable)"
+)
+@click.option(
+    "--weight",
+    "weights",
+    multiple=True,
+    type=float,
+    help="Per-model weight (repeatable, matches model order)",
+)
 @click.option("--device", type=click.Choice(["cpu", "cuda", "mps"]), default=None)
-@click.option("--backend", type=click.Choice(["auto", "onnx", "torch"]), default=None,
-              help="Ensemble backend: onnx (torch-free, default), torch, or auto")
+@click.option(
+    "--backend",
+    type=click.Choice(["auto", "onnx", "torch"]),
+    default=None,
+    help="Ensemble backend: onnx (torch-free, default), torch, or auto",
+)
 @click.option("--output", "-o", default=None)
 @click.pass_context
-def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, weights, device, backend, output):
+def tool_classify_td_ensemble(
+    ctx, text, from_file, categories, model_names, weights, device, backend, output
+):
     """Classify snippets with a WEIGHTED ENSEMBLE of TD models.
 
     Runs on the native torch-free ONNX ensemble by default; pass
@@ -569,6 +743,7 @@ def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, wei
         --category security --category design --weight 0.6 --weight 0.4
     """
     from code_review_agent.tools import classify_technical_debt_ensemble
+
     _load_cfg(ctx.obj.get("config_path"))
 
     texts = list(text)
@@ -600,6 +775,7 @@ def tool_classify_td_ensemble(ctx, text, from_file, categories, model_names, wei
 def tool_td_categories(ctx):
     """List the available technical-debt categories and their HF model ids."""
     from code_review_agent.tools import list_td_categories
+
     _load_cfg(ctx.obj.get("config_path"))
 
     result = list_td_categories()
@@ -611,14 +787,17 @@ def tool_td_categories(ctx):
         table.add_row(c["category"], c["label"], c["model"])
     console.print()
     console.print(table)
-    console.print(f"\n[dim]{len(result['categories'])} categories, "
-                  f"{len(result['aliases'])} aliases[/dim]\n")
+    console.print(
+        f"\n[dim]{len(result['categories'])} categories, {len(result['aliases'])} aliases[/dim]\n"
+    )
 
 
 @run_tool.command("td-issues")
 @click.argument("repo")
 @click.option("--category", default=None, help="Debt category (default: general)")
-@click.option("--state", type=click.Choice(["open", "closed", "all"]), default="all", show_default=True)
+@click.option(
+    "--state", type=click.Choice(["open", "closed", "all"]), default="all", show_default=True
+)
 @click.option("--limit", default=50, show_default=True, type=int)
 @click.option("--all", "fetch_all", is_flag=True, help="Fetch every issue (paginates)")
 @click.option("--token", default=None, help="GitHub token (or set GITHUB_TOKEN)")
@@ -634,13 +813,21 @@ def tool_td_issues(ctx, repo, category, state, limit, fetch_all, token, device, 
       code-review run-tool td-issues pandas-dev/pandas --category defect --limit 30
     """
     from code_review_agent.tools import classify_github_issues
+
     _load_cfg(ctx.obj.get("config_path"))
 
-    console.print("[dim]Fetching issues (network) and classifying (downloads model on first run)…[/dim]")
+    console.print(
+        "[dim]Fetching issues (network) and classifying (downloads model on first run)…[/dim]"
+    )
     with console.status(f"[cyan]Classifying issues from {repo}…[/cyan]"):
         result = classify_github_issues(
-            repo, category=category, state=state, limit=limit,
-            fetch_all=fetch_all, token=token, device=device,
+            repo,
+            category=category,
+            state=state,
+            limit=limit,
+            fetch_all=fetch_all,
+            token=token,
+            device=device,
         )
     _print_tool_result(result, fmt, output, "GitHub Issues — Technical Debt")
 
@@ -650,19 +837,29 @@ def tool_td_issues(ctx, repo, category, state, limit, fetch_all, token, device, 
 @click.option("--output-dir", "-o", required=True, help="Directory to write train/test CSVs")
 @click.option("--test-size", default=0.2, show_default=True, type=float)
 @click.option("--random-state", default=42, show_default=True, type=int)
-@click.option("--repo-column", default=None, help="Column with repository info (enables top-repo extraction)")
+@click.option(
+    "--repo-column", default=None, help="Column with repository info (enables top-repo extraction)"
+)
 @click.option("--hf-dataset", "is_hf", is_flag=True, help="data_file is a HuggingFace dataset name")
 @click.option("--numeric-labels", is_flag=True, help="Labels are already 0/1")
 @click.pass_context
-def tool_td_split(ctx, data_file, output_dir, test_size, random_state, repo_column, is_hf, numeric_labels):
+def tool_td_split(
+    ctx, data_file, output_dir, test_size, random_state, repo_column, is_hf, numeric_labels
+):
     """Split/save a dataset for TD training (tdsuite split-data)."""
     from code_review_agent.tools import td_split_data
+
     _load_cfg(ctx.obj.get("config_path"))
 
     with console.status("[cyan]Splitting data…[/cyan]"):
         result = td_split_data(
-            data_file, output_dir, test_size=test_size, random_state=random_state,
-            repo_column=repo_column, is_huggingface_dataset=is_hf, is_numeric_labels=numeric_labels,
+            data_file,
+            output_dir,
+            test_size=test_size,
+            random_state=random_state,
+            repo_column=repo_column,
+            is_huggingface_dataset=is_hf,
+            is_numeric_labels=numeric_labels,
         )
     _print_tool_result(result, "json", None, "TD Data Split")
 
@@ -677,13 +874,17 @@ def tool_td_split(ctx, data_file, output_dir, test_size, random_state, repo_colu
 def tool_td_export_onnx(ctx, model_name, model_path, output, max_length, opset):
     """Export a transformer TD model to ONNX for CPU inference (tdsuite export-onnx)."""
     from code_review_agent.tools import td_export_onnx
+
     _load_cfg(ctx.obj.get("config_path"))
 
     console.print("[dim]Note: downloads the source model and requires the 'onnx' package.[/dim]")
     with console.status("[cyan]Exporting to ONNX…[/cyan]"):
         result = td_export_onnx(
-            output, model_name=model_name, model_path=model_path,
-            max_length=max_length, opset=opset,
+            output,
+            model_name=model_name,
+            model_path=model_path,
+            max_length=max_length,
+            opset=opset,
         )
     _print_tool_result(result, "json", None, "TD ONNX Export")
 
@@ -701,18 +902,38 @@ def tool_td_export_onnx(ctx, model_name, model_path, output, max_length, opset):
 @click.option("--cross-validation", is_flag=True)
 @click.option("--device", type=click.Choice(["cpu", "cuda"]), default=None)
 @click.pass_context
-def tool_td_train(ctx, data_file, model_name, output_dir, num_epochs, batch_size,
-                  learning_rate, positive_category, numeric_labels, is_hf, cross_validation, device):
+def tool_td_train(
+    ctx,
+    data_file,
+    model_name,
+    output_dir,
+    num_epochs,
+    batch_size,
+    learning_rate,
+    positive_category,
+    numeric_labels,
+    is_hf,
+    cross_validation,
+    device,
+):
     """Train a binary TD classifier (tdsuite train). Requires torch; GPU strongly recommended."""
     from code_review_agent.tools import td_train
+
     _load_cfg(ctx.obj.get("config_path"))
 
     console.print("[yellow]Training requires torch and is very slow on CPU.[/yellow]")
     result = td_train(
-        data_file, model_name, output_dir,
-        num_epochs=num_epochs, batch_size=batch_size, learning_rate=learning_rate,
-        positive_category=positive_category, numeric_labels=numeric_labels,
-        is_huggingface_dataset=is_hf, cross_validation=cross_validation, device=device,
+        data_file,
+        model_name,
+        output_dir,
+        num_epochs=num_epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        positive_category=positive_category,
+        numeric_labels=numeric_labels,
+        is_huggingface_dataset=is_hf,
+        cross_validation=cross_validation,
+        device=device,
     )
     _print_tool_result(result, "json", None, "TD Training")
 
@@ -728,9 +949,12 @@ def tool_td_train(ctx, data_file, model_name, output_dir, num_epochs, batch_size
 @click.option("--output", "-o", default=None)
 @click.option("--format", "fmt", type=click.Choice(["json", "table"]), default="table")
 @click.pass_context
-def tool_code_intel(ctx, path, symbol, usages, metrics_only, import_graph, top_n, ignore, output, fmt):
+def tool_code_intel(
+    ctx, path, symbol, usages, metrics_only, import_graph, top_n, ignore, output, fmt
+):
     """AST code intelligence: symbols, metrics, imports, usages."""
     from code_review_agent.tools import analyze_code_intelligence
+
     _load_cfg(ctx.obj.get("config_path"))
 
     with console.status("[cyan]Analyzing code intelligence…[/cyan]"):
@@ -757,6 +981,7 @@ def tool_code_intel(ctx, path, symbol, usages, metrics_only, import_graph, top_n
 def tool_list_files(ctx, path, ignore):
     """List all Python files in a project directory."""
     from code_review_agent.tools import list_python_files
+
     _load_cfg(ctx.obj.get("config_path"))
 
     result = list_python_files(str(Path(path).resolve()), ignore_dirs=list(ignore) or None)
@@ -781,6 +1006,7 @@ def tool_list_files(ctx, path, ignore):
 def tool_read_file(ctx, file_path, max_lines):
     """Read a Python file with line numbers."""
     from code_review_agent.tools import read_file
+
     _load_cfg(ctx.obj.get("config_path"))
 
     result = read_file(str(Path(file_path).resolve()), max_lines=max_lines)
@@ -788,7 +1014,9 @@ def tool_read_file(ctx, file_path, max_lines):
         console.print(f"[red]{result['error']}[/red]")
         return
 
-    console.print(f"[dim]{result['file']} — {result['shown_lines']}/{result['total_lines']} lines[/dim]\n")
+    console.print(
+        f"[dim]{result['file']} — {result['shown_lines']}/{result['total_lines']} lines[/dim]\n"
+    )
     syntax = Syntax(result["content"], "python", line_numbers=False, theme="monokai")
     console.print(syntax)
     if result.get("truncated"):
@@ -798,6 +1026,7 @@ def tool_read_file(ctx, file_path, max_lines):
 # ---------------------------------------------------------------------------
 # interactive
 # ---------------------------------------------------------------------------
+
 
 @main.command()
 @click.argument("target")
@@ -811,7 +1040,8 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
     """Interactive tool selector — choose which tools to run, then get AI synthesis."""
     cfg = _load_cfg(ctx.obj.get("config_path"))
 
-    from code_review_agent.github_utils import is_github_url, clone_repo
+    from code_review_agent.github_utils import clone_repo, is_github_url
+
     cloned = None
     if is_github_url(target):
         console.print(f"[cyan]Cloning:[/cyan] {target}")
@@ -820,15 +1050,20 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
     else:
         review_path = str(Path(target).resolve())
 
-    console.print(Panel(f"[bold cyan]Interactive Code Review[/bold cyan]\nTarget: [green]{target}[/green]", expand=False))
+    console.print(
+        Panel(
+            f"[bold cyan]Interactive Code Review[/bold cyan]\nTarget: [green]{target}[/green]",
+            expand=False,
+        )
+    )
     console.print()
 
     tool_choices = {
-        "1": ("List Python files",         "list_python_files",         {"directory": review_path}),
-        "2": ("Code Intelligence (AST)",   "analyze_code_intelligence", {"path": review_path}),
-        "3": ("Python smells (all)",       "detect_python_smells",      {"path": review_path}),
-        "4": ("ML smells",                 "detect_ml_smells",          {"path": review_path}),
-        "5": ("Classify technical debt",   None,                        None),  # special
+        "1": ("List Python files", "list_python_files", {"directory": review_path}),
+        "2": ("Code Intelligence (AST)", "analyze_code_intelligence", {"path": review_path}),
+        "3": ("Python smells (all)", "detect_python_smells", {"path": review_path}),
+        "4": ("ML smells", "detect_ml_smells", {"path": review_path}),
+        "5": ("Classify technical debt", None, None),  # special
     }
 
     console.print("[bold]Available tools:[/bold]")
@@ -841,11 +1076,15 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
     selected = click.prompt("Select tools (comma-separated, e.g. 1,3,4 or a)", default="a")
 
     from code_review_agent.tools import (
-        classify_technical_debt, execute_tool,
+        classify_technical_debt,
+        execute_tool,
     )
 
-    keys_to_run = list(tool_choices.keys()) if selected.strip().lower() == "a" \
-                  else [k.strip() for k in selected.split(",") if k.strip() in tool_choices]
+    keys_to_run = (
+        list(tool_choices.keys())
+        if selected.strip().lower() == "a"
+        else [k.strip() for k in selected.split(",") if k.strip() in tool_choices]
+    )
 
     results: dict[str, Any] = {}
     td_texts: list[str] = []
@@ -865,11 +1104,15 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
         py_files = py_files_result.get("files", [])[:5]  # top 5
         for pf in py_files:
             from code_review_agent.tools import read_file as _rf
+
             fc = _rf(pf["abs_path"], max_lines=200)
             content = fc.get("content", "")
             for line in content.splitlines():
                 stripped = line.split("|", 1)[-1].strip()
-                if any(marker in stripped.upper() for marker in ("TODO", "FIXME", "HACK", "NOTE", "XXX")):
+                if any(
+                    marker in stripped.upper()
+                    for marker in ("TODO", "FIXME", "HACK", "NOTE", "XXX")
+                ):
                     td_texts.append(stripped[:200])
         if td_texts:
             with console.status("[cyan]Classifying technical debt…[/cyan]"):
@@ -882,10 +1125,9 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
     # AI synthesis?
     if click.confirm("Run AI synthesis of results?", default=True):
         agent = _make_agent(cfg, provider, model, base_url=base_url, api_key=api_key)
-        summary = json.dumps(
-            {k: v for k, v in results.items()},
-            default=str, indent=2
-        )[:8000]  # truncate to avoid context overflow
+        summary = json.dumps(dict(results), default=str, indent=2)[
+            :8000
+        ]  # truncate to avoid context overflow
         prompt = (
             f"I have run code analysis tools on the project at `{review_path}` and collected these results:\n\n"
             f"```json\n{summary}\n```\n\n"
@@ -896,15 +1138,16 @@ def interactive(ctx, target, output, provider, model, base_url, api_key):
         console.print()
         _stream(agent, agent.ask, prompt, output_path=output)
 
-    if cloned:
-        if click.confirm(f"\nDelete clone at {cloned.local_path}?", default=True):
-            from code_review_agent.github_utils import cleanup_repo as cr
-            cr(cloned)
+    if cloned and click.confirm(f"\nDelete clone at {cloned.local_path}?", default=True):
+        from code_review_agent.github_utils import cleanup_repo as cr
+
+        cr(cloned)
 
 
 # ---------------------------------------------------------------------------
 # show-config
 # ---------------------------------------------------------------------------
+
 
 @main.command("show-config")
 @click.pass_context
@@ -915,8 +1158,9 @@ def show_config(ctx):
 
     def _to_dict(obj):
         if dataclasses.is_dataclass(obj):
-            return {k: _to_dict(v) for k, v in dataclasses.asdict(obj).items()
-                    if not k.startswith("_")}
+            return {
+                k: _to_dict(v) for k, v in dataclasses.asdict(obj).items() if not k.startswith("_")
+            }
         return obj
 
     d = _to_dict(cfg)
@@ -924,6 +1168,7 @@ def show_config(ctx):
     d.pop("_source", None)
 
     import yaml
+
     console.print(f"\n[dim]Config source: [bold]{cfg._source}[/bold][/dim]\n")
     syntax = Syntax(yaml.dump(d, default_flow_style=False), "yaml", theme="monokai")
     console.print(syntax)
@@ -933,10 +1178,11 @@ def show_config(ctx):
 # list-tools
 # ---------------------------------------------------------------------------
 
+
 @main.command("list-tools")
 def list_tools():
     """List all available analysis tools."""
-    from code_review_agent.tools import TOOL_REGISTRY, TOOL_DEFINITIONS_OPENAI
+    from code_review_agent.tools import TOOL_DEFINITIONS_OPENAI, TOOL_REGISTRY
 
     table = Table(title="Available Tools", show_lines=True)
     table.add_column("Tool", style="green", no_wrap=True)
@@ -982,6 +1228,7 @@ def list_tools():
 # providers
 # ---------------------------------------------------------------------------
 
+
 @main.command("providers")
 @click.pass_context
 def providers(ctx):
@@ -1019,7 +1266,9 @@ def providers(ctx):
         key_status(bool(openai_key)) + f"\n[dim]{cfg.openai.api_key_env}[/dim]",
     )
     # anthropic
-    anth_key = resolve_api_key(cfg.anthropic.api_key, cfg.anthropic.api_key_env, "ANTHROPIC_API_KEY")
+    anth_key = resolve_api_key(
+        cfg.anthropic.api_key, cfg.anthropic.api_key_env, "ANTHROPIC_API_KEY"
+    )
     table.add_row(
         "anthropic",
         active if cfg.provider == "anthropic" else "",
@@ -1030,13 +1279,16 @@ def providers(ctx):
 
     console.print()
     console.print(table)
-    console.print(f"\n[dim]Active provider: [bold]{cfg.provider}[/bold]  (config: {cfg._source})[/dim]")
+    console.print(
+        f"\n[dim]Active provider: [bold]{cfg.provider}[/bold]  (config: {cfg._source})[/dim]"
+    )
     console.print()
 
 
 # ---------------------------------------------------------------------------
 # doctor (health check)
 # ---------------------------------------------------------------------------
+
 
 @main.command("doctor")
 @click.pass_context
@@ -1080,15 +1332,27 @@ def doctor(ctx):
         return (label, ok(f"installed (v{ver})"))
 
     # --- analyzer package availability + versions ---
-    rows.append(_check_installed("ml_code_smell_detector", "ml_code_smell_detector",
-                                 ["ml-code-smell-detector", "ml_code_smell_detector"]))
-    rows.append(_check_installed("code_quality_analyzer", "code_quality_analyzer",
-                                 ["code-quality-analyzer", "code_quality_analyzer"]))
+    rows.append(
+        _check_installed(
+            "ml_code_smell_detector",
+            "ml_code_smell_detector",
+            ["ml-code-smell-detector", "ml_code_smell_detector"],
+        )
+    )
+    rows.append(
+        _check_installed(
+            "code_quality_analyzer",
+            "code_quality_analyzer",
+            ["code-quality-analyzer", "code_quality_analyzer"],
+        )
+    )
     rows.append(_check_installed("tdsuite", "tdsuite", ["tdsuite"]))
 
     # --- TD runtimes (spec check only; do not import) ---
-    for label, modname, dist in [("torch", "torch", "torch"),
-                                  ("onnxruntime", "onnxruntime", "onnxruntime")]:
+    for label, modname, dist in [
+        ("torch", "torch", "torch"),
+        ("onnxruntime", "onnxruntime", "onnxruntime"),
+    ]:
         if importlib.util.find_spec(modname) is not None:
             try:
                 ver = importlib.metadata.version(dist)
@@ -1110,6 +1374,7 @@ def doctor(ctx):
             api_key = cfg.ollama.api_key
         try:
             from openai import OpenAI
+
             client = OpenAI(base_url=base, api_key=api_key or "none", timeout=8, max_retries=0)
             models = client.models.list()
             n = len(list(models.data))
@@ -1141,6 +1406,7 @@ def doctor(ctx):
 # ollama-models
 # ---------------------------------------------------------------------------
 
+
 @main.command("ollama-models")
 @click.option("--url", default=None, help="Ollama base URL (from config if not set)")
 @click.pass_context
@@ -1150,6 +1416,7 @@ def ollama_models(ctx, url):
     base = url or cfg.ollama.base_url
     try:
         from openai import OpenAI
+
         client = OpenAI(base_url=base, api_key="ollama")
         models = client.models.list()
         table = Table(title=f"Ollama models @ {base}", show_lines=False)
@@ -1172,8 +1439,12 @@ _SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 # Smell-group keys whose entries can be filtered by severity.
 _SMELL_GROUP_KEYS = (
-    "framework_smells", "huggingface_smells", "general_ml_smells",
-    "code_smells", "architectural_smells", "structural_smells",
+    "framework_smells",
+    "huggingface_smells",
+    "general_ml_smells",
+    "code_smells",
+    "architectural_smells",
+    "structural_smells",
 )
 
 
@@ -1197,8 +1468,11 @@ def _filter_result_by_severity(result: dict, min_severity: str) -> dict:
             new_group = []
             for entry in group:
                 if isinstance(entry, dict) and "smells" in entry:
-                    kept = [s for s in entry.get("smells", [])
-                            if _sev_rank((s or {}).get("severity")) <= threshold]
+                    kept = [
+                        s
+                        for s in entry.get("smells", [])
+                        if _sev_rank((s or {}).get("severity")) <= threshold
+                    ]
                     if kept:
                         new_entry = dict(entry)
                         new_entry["smells"] = kept
@@ -1241,9 +1515,15 @@ def _print_tool_result(result: dict, fmt: str, output: str | None, title: str):
 
         # Show findings grouped by severity
         findings_shown = False
-        for key in ("framework_smells", "huggingface_smells", "general_ml_smells",
-                     "code_smells", "architectural_smells", "structural_smells",
-                     "predictions"):
+        for key in (
+            "framework_smells",
+            "huggingface_smells",
+            "general_ml_smells",
+            "code_smells",
+            "architectural_smells",
+            "structural_smells",
+            "predictions",
+        ):
             items = result.get(key, [])
             if not items:
                 continue
@@ -1252,7 +1532,9 @@ def _print_tool_result(result: dict, fmt: str, output: str | None, title: str):
             _render_findings_table(items, key)
 
         if not findings_shown:
-            syntax = Syntax(json.dumps(result, default=str, indent=2)[:4000], "json", theme="monokai")
+            syntax = Syntax(
+                json.dumps(result, default=str, indent=2)[:4000], "json", theme="monokai"
+            )
             console.print(syntax)
 
 
@@ -1270,13 +1552,21 @@ def _render_findings_table(items: list, source_key: str):
                 table.add_row(
                     p.get("text", "")[:60],
                     str(p.get("predicted_class", p.get("error", "?"))),
-                    f"{p.get('predicted_probability', 0.0):.0%}" if "predicted_probability" in p else "—",
+                    f"{p.get('predicted_probability', 0.0):.0%}"
+                    if "predicted_probability" in p
+                    else "—",
                 )
         console.print(table)
         return
 
     # File→smells grouping
-    if isinstance(items, list) and items and isinstance(items[0], dict) and "file" in items[0] and "smells" in items[0]:
+    if (
+        isinstance(items, list)
+        and items
+        and isinstance(items[0], dict)
+        and "file" in items[0]
+        and "smells" in items[0]
+    ):
         for entry in items:
             console.print(f"  [green]{entry['file']}[/green]")
             for smell in entry.get("smells", []):
@@ -1347,7 +1637,14 @@ def _print_code_intel_table(result: dict, target_path: str):
             cc = str(h["cyclomatic_complexity"])
             if h["cyclomatic_complexity"] >= 10:
                 cc = f"[red]{cc}[/red]"
-            table.add_row(f"{parent}{h['name']}", loc, cc, str(h["loc"]), str(h["param_count"]), str(h["nesting_depth"]))
+            table.add_row(
+                f"{parent}{h['name']}",
+                loc,
+                cc,
+                str(h["loc"]),
+                str(h["param_count"]),
+                str(h["nesting_depth"]),
+            )
         console.print()
         console.print(table)
 

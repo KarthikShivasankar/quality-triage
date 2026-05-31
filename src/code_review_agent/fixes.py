@@ -40,7 +40,7 @@ FIX_BLOCK_INSTRUCTIONS = (
     "fix, emit one or more FIX blocks in EXACTLY this format (do not wrap them in "
     "Markdown code fences):\n"
     "\n"
-    '[[[FIX file=\"<relative path within the project>\" lines=<start>-<end> desc=\"<short description>\"]]]\n'
+    '[[[FIX file="<relative path within the project>" lines=<start>-<end> desc="<short description>"]]]\n'
     "--- ORIGINAL\n"
     "<the exact current source lines being replaced>\n"
     "--- FIXED\n"
@@ -106,8 +106,8 @@ def _split_original_fixed(body: str) -> tuple[str, str]:
     fixed_marker = re.search(r"\n?---\s*FIXED\s*\n", body[start:])
     if not fixed_marker:
         return body[start:].strip("\n"), ""
-    original = body[start:start + fixed_marker.start()]
-    fixed = body[start + fixed_marker.end():]
+    original = body[start : start + fixed_marker.start()]
+    fixed = body[start + fixed_marker.end() :]
     return original.strip("\n"), fixed.strip("\n")
 
 
@@ -123,16 +123,18 @@ def parse_fix_blocks(text: str) -> list[FixSuggestion]:
         file_attr = attrs.get("file", "").strip()
         if not file_attr:
             continue
-        suggestions.append(FixSuggestion(
-            file=file_attr,
-            start_line=start,
-            end_line=end or start,
-            original=original,
-            replacement=fixed,
-            description=attrs.get("desc", ""),
-            finding_id=attrs.get("id") or None,
-            source="agent",
-        ))
+        suggestions.append(
+            FixSuggestion(
+                file=file_attr,
+                start_line=start,
+                end_line=end or start,
+                original=original,
+                replacement=fixed,
+                description=attrs.get("desc", ""),
+                finding_id=attrs.get("id") or None,
+                source="agent",
+            )
+        )
     return suggestions
 
 
@@ -141,8 +143,10 @@ def make_unified_diff(file: str, original: str, replacement: str) -> str:
     orig_lines = original.splitlines()
     new_lines = replacement.splitlines()
     diff = difflib.unified_diff(
-        orig_lines, new_lines,
-        fromfile=f"a/{file}", tofile=f"b/{file}",
+        orig_lines,
+        new_lines,
+        fromfile=f"a/{file}",
+        tofile=f"b/{file}",
         lineterm="",
     )
     return "\n".join(diff)
@@ -210,19 +214,21 @@ def apply_fixes(
             continue
 
         diff_text = make_unified_diff(s.file, s.original, s.replacement)
-        outcome.diffs.append({
-            "fix": tag,
-            "file": s.file,
-            "lines": f"{s.start_line}-{s.end_line}",
-            "description": s.description,
-            "diff": diff_text,
-        })
+        outcome.diffs.append(
+            {
+                "fix": tag,
+                "file": s.file,
+                "lines": f"{s.start_line}-{s.end_line}",
+                "description": s.description,
+                "diff": diff_text,
+            }
+        )
 
         file_lines = content.splitlines()
         start, end = s.start_line, s.end_line
         match_ok = False
         if 1 <= start <= end <= len(file_lines):
-            current = "\n".join(file_lines[start - 1:end])
+            current = "\n".join(file_lines[start - 1 : end])
             match_ok = current.strip() == s.original.strip()
 
         # ---- Safety gating: never write unless explicitly told to. ----
@@ -230,22 +236,28 @@ def apply_fixes(
             outcome.skipped.append({"fix": tag, "file": s.file, "reason": "dry-run (no write)"})
             continue
         if not confirm:
-            outcome.skipped.append({
-                "fix": tag, "file": s.file,
-                "reason": "apply requires explicit confirmation",
-            })
+            outcome.skipped.append(
+                {
+                    "fix": tag,
+                    "file": s.file,
+                    "reason": "apply requires explicit confirmation",
+                }
+            )
             continue
         if not s.original.strip():
             outcome.skipped.append({"fix": tag, "file": s.file, "reason": "empty ORIGINAL block"})
             continue
         if not match_ok:
-            outcome.skipped.append({
-                "fix": tag, "file": s.file,
-                "reason": "ORIGINAL block does not match current file contents",
-            })
+            outcome.skipped.append(
+                {
+                    "fix": tag,
+                    "file": s.file,
+                    "reason": "ORIGINAL block does not match current file contents",
+                }
+            )
             continue
 
-        new_lines = file_lines[:start - 1] + s.replacement.splitlines() + file_lines[end:]
+        new_lines = file_lines[: start - 1] + s.replacement.splitlines() + file_lines[end:]
         trailing_nl = "\n" if content.endswith("\n") else ""
         new_content = "\n".join(new_lines) + trailing_nl
         try:
@@ -253,10 +265,14 @@ def apply_fixes(
                 backup_path = resolved.with_name(resolved.name + ".bak")
                 backup_path.write_text(content, encoding="utf-8")
             resolved.write_text(new_content, encoding="utf-8")
-            outcome.applied.append({
-                "fix": tag, "file": s.file, "lines": f"{start}-{end}",
-                "backup": str(resolved.name + ".bak") if backup else None,
-            })
+            outcome.applied.append(
+                {
+                    "fix": tag,
+                    "file": s.file,
+                    "lines": f"{start}-{end}",
+                    "backup": str(resolved.name + ".bak") if backup else None,
+                }
+            )
         except Exception as exc:
             outcome.skipped.append({"fix": tag, "file": s.file, "reason": f"write failed: {exc}"})
 

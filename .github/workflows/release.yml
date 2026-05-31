@@ -1,0 +1,83 @@
+name: Release
+
+# Publishes to PyPI via Trusted Publishing (OIDC) when a version tag is pushed.
+# No API token is stored in GitHub — PyPI verifies the workflow identity.
+#
+# One-time PyPI setup (https://pypi.org/manage/account/publishing/):
+#   PyPI project : quality-triage
+#   Owner        : KarthikShivasankar
+#   Repository   : quality-triage
+#   Workflow     : release.yml
+#   Environment  : pypi
+#
+# Cut a release:
+#   1. Bump `version` in pyproject.toml and __init__.py (keep them in sync).
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
+#   3. This workflow builds, verifies, and publishes the artifacts.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Verify tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(grep -m1 '^version' pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
+          echo "tag version: $TAG / pyproject version: $PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::Tag v$TAG does not match pyproject version $PKG. Bump pyproject.toml + __init__.py and re-tag."
+            exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Validate distribution metadata (twine check)
+        run: uv run --with twine twine check dist/*
+
+      - name: Upload distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI (Trusted Publishing)
+    needs: [build]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/quality-triage
+    permissions:
+      id-token: write # REQUIRED for OIDC Trusted Publishing
+    steps:
+      - name: Download built distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

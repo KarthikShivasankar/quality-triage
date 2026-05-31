@@ -53,13 +53,37 @@ per-category** model on the HuggingFace Hub (general/code/design/security/…).
 
 ## Installation
 
-Requires Python ≥ 3.10 and `[uv](https://docs.astral.sh/uv/)`.
+Requires Python ≥ 3.10.
+
+> The distribution is published as **`quality-triage`** on PyPI; the installed
+> CLI command is **`code-review`** and the import package is `code_review_agent`.
+
+### From PyPI (end users)
+
+```bash
+# pip
+pip install quality-triage
+pip install "quality-triage[mcp]"   # + MCP server
+pip install "quality-triage[web]"   # + FastAPI web UI
+
+# or uv
+uv add quality-triage
+
+code-review doctor
+```
+
+The three detector engines (`ml-code-smell-detector`, `code-quality-analyzer`,
+`tdsuite`) are published on PyPI and resolve automatically as dependencies.
+
+### From source (development)
+
+Requires `[uv](https://docs.astral.sh/uv/)`.
 
 ```bash
 git clone https://github.com/KarthikShivasankar/quality-triage.git
 cd quality-triage
 
-# Core install (includes git-sourced detectors + onnxruntime)
+# Core install (detectors pinned to git `main` via [tool.uv.sources])
 uv sync
 
 # Optional: MCP server support
@@ -67,6 +91,9 @@ uv sync --extra mcp
 
 # Optional: FastAPI web UI
 uv sync --extra web
+
+# Everything + dev tooling (ruff, pytest)
+uv sync --extra web --extra mcp --dev
 ```
 
 Activate the virtual environment:
@@ -81,7 +108,9 @@ source .venv/bin/activate
 
 Or prefix every command with `uv run` (e.g. `uv run code-review doctor`).
 
-> **Three detectors are installed from GitHub (branch `main`):**
+> **Three detector engines back the analysis.** PyPI installs resolve them from
+> PyPI; `uv sync` from source pins them to GitHub `main` (via `[tool.uv.sources]`)
+> so development always tracks the latest detector code:
 >
 > - `ml-code-smell-detector` — [KarthikShivasankar/ml_smells_detector](https://github.com/KarthikShivasankar/ml_smells_detector)
 > - `code-quality-analyzer` — [KarthikShivasankar/python_smells_detector](https://github.com/KarthikShivasankar/python_smells_detector)
@@ -464,18 +493,108 @@ quality-triage/
 
 ## Development
 
+Set up a full dev environment (core + web + mcp + dev tooling) and run the same
+gates CI enforces:
+
 ```bash
-uv sync --dev
-uv run ruff format src/
-uv run ruff check src/       # gated by [tool.ruff] in pyproject.toml
+uv sync --extra web --extra mcp --dev
+
+uv run ruff format src/        # auto-format
+uv run ruff format --check src/  # verify formatting (CI gate)
+uv run ruff check src/         # lint (CI gate); add --fix to auto-fix
 uv run python -m pytest tests/ -q
 ```
 
+Lint/format rules live in `[tool.ruff]` / `[tool.ruff.lint]` in `pyproject.toml`
+(rule set: `E`, `W`, `F`, `I`, `B`, `UP`, `C4`, `SIM`; line length 100). Keep
+both `ruff check` and `ruff format --check` green before pushing — CI fails
+otherwise.
+
 ### Continuous Integration
 
-`.github/workflows/ci.yml` runs `ruff check src/` and the full offline test
-suite on every push and pull request to `main`, against Python 3.10 and 3.12
-(the project's supported range). The suite needs no network, GPU, or API keys.
+`.github/workflows/ci.yml` runs on every push and pull request to `main` (and
+`workflow_dispatch`), with three jobs:
+
+| Job     | What it does                                                            |
+| ------- | ----------------------------------------------------------------------- |
+| `lint`  | `ruff check src/` + `ruff format --check src/`                          |
+| `test`  | full offline suite on Python **3.10, 3.11, 3.12**                       |
+| `build` | `uv build` + `twine check dist/*`, uploads the sdist/wheel as artifacts |
+
+The suite needs no network, GPU, or API keys. The `build` job runs only after
+`lint` and `test` pass, so a green CI run proves the package still builds and
+its metadata is valid.
+
+## Maintaining the package
+
+### Cut a release (PyPI via Trusted Publishing)
+
+Releases publish to PyPI through **Trusted Publishing (OIDC)** — no API token is
+stored in GitHub. `.github/workflows/release.yml` triggers on any `v*` tag.
+
+**One-time PyPI setup** (project owner, at
+[pypi.org/manage/account/publishing](https://pypi.org/manage/account/publishing/)):
+add a *pending publisher* for project `quality-triage` →
+
+| Field        | Value            |
+| ------------ | ---------------- |
+| Owner        | `KarthikShivasankar` |
+| Repository   | `quality-triage` |
+| Workflow     | `release.yml`    |
+| Environment  | `pypi`           |
+
+Then create a GitHub environment named `pypi` (Settings → Environments).
+
+**Each release:**
+
+```bash
+# 1. Bump the version in BOTH places (must match):
+#    - pyproject.toml  -> [project] version
+#    - src/code_review_agent/__init__.py -> __version__
+# 2. Update docs / CHANGELOG as needed, commit.
+# 3. Tag and push — this fires the release workflow:
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+The workflow builds the sdist + wheel, runs `twine check`, and publishes to PyPI
+via OIDC. You can re-run it manually from the Actions tab (`workflow_dispatch`).
+
+### Local manual publish (fallback)
+
+If you ever need to publish without CI, the token in `.env` is used:
+
+```bash
+uv build
+# uv (reads UV_PUBLISH_TOKEN from .env):
+set -a; . ./.env; set +a
+uv publish
+
+# or twine (reads TWINE_USERNAME / TWINE_PASSWORD from .env):
+uv run --with twine twine upload dist/*
+```
+
+`.env` is gitignored — never commit it. Prefer Trusted Publishing over tokens.
+
+### Detector dependency versions
+
+`pyproject.toml` pins `ml-code-smell-detector`, `code-quality-analyzer`, and
+`tdsuite` with `>=` lower bounds, while `[tool.uv.sources]` points dev installs
+at their GitHub `main`. When you ship features that rely on newer detector
+behavior, **publish those detector packages to PyPI first**, then bump the lower
+bounds here so `pip install quality-triage` stays consistent with `uv sync`.
+
+### Updating documentation
+
+When behavior, flags, or the test count change, update — and keep in sync:
+
+- `README.md` — user-facing docs, CLI reference table, examples.
+- `AGENTS.md` — the agent compatibility entrypoint (command surface + safety).
+- `skills.md` — the canonical agent contract.
+- `docs/claude-code.md`, `docs/agent-interop.md` — harness playbooks.
+
+After doc edits, re-run the suite and refresh any quoted numbers (e.g. the
+"**215 passed**" count) so docs never drift from reality.
 
 ## Testing
 

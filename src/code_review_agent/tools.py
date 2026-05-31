@@ -5,16 +5,17 @@ All outputs use the canonical findings shape with exact file:line:col.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import traceback
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _rel(abs_path: str, root: str) -> str:
     try:
@@ -41,15 +42,13 @@ def _enrich_column(file_path: str, line: int, snippet: str) -> int | None:
 def _python_files(path: Path, ignore: set[str]) -> list[Path]:
     if path.is_file() and path.suffix == ".py":
         return [path]
-    return [
-        f for f in path.rglob("*.py")
-        if not any(part in ignore for part in f.parts)
-    ]
+    return [f for f in path.rglob("*.py") if not any(part in ignore for part in f.parts)]
 
 
 def _get_cfg():
     """Lazy import of config to avoid circular imports."""
     from code_review_agent.config import get_config
+
     return get_config()
 
 
@@ -139,12 +138,14 @@ def _resolve_thresholds(cfg, smell_type: str) -> dict:
 # ML smell normalisation (keys differ between the three detectors)
 # ---------------------------------------------------------------------------
 
+
 def _parse_line_number(value: Any) -> int:
     """Extract an int line number from an int or a string like 'Line 5'."""
     if isinstance(value, int):
         return value
     if isinstance(value, str):
         import re as _re
+
         m = _re.search(r"\d+", value)
         if m:
             return int(m.group())
@@ -171,12 +172,7 @@ def _normalize_ml_smell(smell: Any) -> dict:
         words = str(raw_name).split()
         name = " ".join(words[:8]) if words else "ML Smell"
 
-    description = (
-        smell.get("description")
-        or smell.get("smell")
-        or smell.get("name")
-        or ""
-    )
+    description = smell.get("description") or smell.get("smell") or smell.get("name") or ""
 
     line_number = smell.get("line_number")
     if line_number is None and smell.get("location"):
@@ -201,6 +197,7 @@ def _normalize_ml_smell(smell: Any) -> dict:
 # ---------------------------------------------------------------------------
 # Tool 1: detect_ml_smells
 # ---------------------------------------------------------------------------
+
 
 def detect_ml_smells(
     path: str,
@@ -252,10 +249,8 @@ def detect_ml_smells(
                 raw = detector.detect_smells(file_str)
                 # Prefer get_results() if available (canonical accumulated list).
                 if hasattr(detector, "get_results"):
-                    try:
+                    with contextlib.suppress(Exception):
                         raw = detector.get_results()
-                    except Exception:
-                        pass
 
                 if isinstance(raw, list):
                     smell_list = [_normalize_ml_smell(s) for s in raw]
@@ -280,7 +275,11 @@ def detect_ml_smells(
             except Exception as exc:
                 results["errors"].append({"file": file_str, "error": str(exc)})
 
-    total_smells = sum(len(e["smells"]) for key in ("framework_smells", "huggingface_smells", "general_ml_smells") for e in results[key])
+    total_smells = sum(
+        len(e["smells"])
+        for key in ("framework_smells", "huggingface_smells", "general_ml_smells")
+        for e in results[key]
+    )
     results["summary"] = {
         "files_analyzed": len(py_files),
         "total_smells": total_smells,
@@ -295,6 +294,7 @@ def detect_ml_smells(
 # Tool 2: detect_python_smells
 # ---------------------------------------------------------------------------
 
+
 def detect_python_smells(
     path: str,
     analysis_type: str = "all",
@@ -304,8 +304,8 @@ def detect_python_smells(
     """Detect code, architectural, and structural smells using code_quality_analyzer."""
     try:
         from code_quality_analyzer import (
-            CodeSmellDetector,
             ArchitecturalSmellDetector,
+            CodeSmellDetector,
             StructuralSmellDetector,
         )
     except ImportError as e:
@@ -339,21 +339,24 @@ def detect_python_smells(
                 try:
                     det.detect_smells(str(py_file))
                 except Exception as exc:
-                    results["errors"].append({"file": str(py_file), "phase": "code_smells", "error": str(exc)})
+                    results["errors"].append(
+                        {"file": str(py_file), "phase": "code_smells", "error": str(exc)}
+                    )
                 # Three catalog detectors exist upstream but are NOT in the
                 # dispatch list, so they never fire. Invoke them explicitly per
                 # file (they append to det.code_smells, like the dispatched ones).
                 _run_unwired_code_detectors(det, py_file, results)
-            try:
+            with contextlib.suppress(Exception):
                 det.detect_cross_file_smells()
-            except Exception:
-                pass
             code_smells = _extract_smell_list(det, "code_smells")
             # Supplement: correct Switch-Statements detection (upstream caps at 2
             # branches because it doesn't recurse elif chains).
             try:
                 from code_review_agent.cqa_supplement import merge_dedup, supplemental_switch_smells
-                switch_smells = supplemental_switch_smells(py_files, code_thresh.get("COMPLEX_CONDITIONAL", 3))
+
+                switch_smells = supplemental_switch_smells(
+                    py_files, code_thresh.get("COMPLEX_CONDITIONAL", 3)
+                )
                 code_smells = merge_dedup(code_smells, switch_smells)
             except Exception as exc:
                 results["errors"].append({"phase": "switch_supplement", "error": str(exc)})
@@ -386,6 +389,7 @@ def detect_python_smells(
                 # fresh temp dir, analyse it there, then clean up.
                 import shutil
                 import tempfile
+
                 tmp = tempfile.mkdtemp(prefix="cra_struct_")
                 try:
                     shutil.copy2(str(target), os.path.join(tmp, target.name))
@@ -398,8 +402,11 @@ def detect_python_smells(
             # exceeds the threshold and mislabels classes as "Isolated").
             try:
                 from code_review_agent.cqa_supplement import merge_dedup, supplemental_dit_smells
+
                 struct_files = _python_files(target, set(ignore))
-                dit_smells = supplemental_dit_smells(struct_files, struct_thresh.get("DIT_THRESHOLD", 3))
+                dit_smells = supplemental_dit_smells(
+                    struct_files, struct_thresh.get("DIT_THRESHOLD", 3)
+                )
                 structural_smells = merge_dedup(structural_smells, dit_smells)
             except Exception as exc:
                 results["errors"].append({"phase": "dit_supplement", "error": str(exc)})
@@ -430,7 +437,9 @@ def _run_unwired_code_detectors(det: Any, py_file: Any, results: dict) -> None:
         source = Path(str(py_file)).read_text(encoding="utf-8", errors="replace")
         module = astroid.parse(source, path=str(py_file))
     except Exception as exc:
-        results["errors"].append({"file": str(py_file), "phase": "astroid_parse", "error": str(exc)})
+        results["errors"].append(
+            {"file": str(py_file), "phase": "astroid_parse", "error": str(exc)}
+        )
         return
     for meth_name in _UNWIRED_CODE_DETECTORS:
         meth = getattr(det, meth_name, None)
@@ -456,6 +465,7 @@ def _extract_smell_list(detector: Any, attr: str) -> list[dict]:
     try:
         import contextlib
         import io
+
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             detector.print_report()
@@ -520,11 +530,27 @@ TD_CATEGORY_MODELS: dict[str, str] = {
 # Canonical (de-duplicated) category keys, in a friendly order. Used for the
 # ``--all-categories`` sweep and for listing available categories.
 TD_PRIMARY_CATEGORIES: list[str] = [
-    "general", "code", "design", "documentation", "test", "defect",
-    "requirement", "build", "automation", "people", "process",
-    "infrastructure", "architecture", "service",
-    "security", "performance", "usability", "maintainability",
-    "reliability", "portability", "compatibility",
+    "general",
+    "code",
+    "design",
+    "documentation",
+    "test",
+    "defect",
+    "requirement",
+    "build",
+    "automation",
+    "people",
+    "process",
+    "infrastructure",
+    "architecture",
+    "service",
+    "security",
+    "performance",
+    "usability",
+    "maintainability",
+    "reliability",
+    "portability",
+    "compatibility",
 ]
 
 # Map a model id back to a human-readable debt label.
@@ -592,7 +618,10 @@ def _download_onnx_from_hub(model_path: str) -> tuple[str | None, str | None]:
     def _is_tokenizer_file(f: str) -> bool:
         return (
             f.endswith((".json", ".txt", ".model"))
-            or "vocab" in f or "merges" in f or "tokenizer" in f or "sentencepiece" in f
+            or "vocab" in f
+            or "merges" in f
+            or "tokenizer" in f
+            or "sentencepiece" in f
         )
 
     wanted: list[str] = [chosen] + [f for f in siblings if _is_tokenizer_file(f)]
@@ -638,12 +667,15 @@ def _load_onnx_engine_class():
     """
     try:
         from tdsuite.utils import OnnxInferenceEngine
+
         return OnnxInferenceEngine
     except Exception:
         pass
     try:
         import importlib.util
+
         import tdsuite
+
         fp = Path(tdsuite.__file__).parent / "utils" / "onnx_inference.py"
         if not fp.exists():
             return None
@@ -668,12 +700,15 @@ def _load_onnx_ensemble_engine_class():
     """
     try:
         from tdsuite.utils import OnnxEnsembleInferenceEngine
+
         return OnnxEnsembleInferenceEngine
     except Exception:
         pass
     try:
         import importlib.util
+
         import tdsuite
+
         fp = Path(tdsuite.__file__).parent / "utils" / "onnx_inference.py"
         if not fp.exists():
             return None
@@ -722,6 +757,7 @@ def _build_td_engine(model_path: str, onnx_path: str | None, device: str, backen
 
     # PyTorch fallback (requires torch + transformers; auto-downloads model).
     from tdsuite.utils import InferenceEngine
+
     return InferenceEngine(model_path=model_path, device=device)
 
 
@@ -801,7 +837,7 @@ def _run_td_predictions(engine: Any, texts: list[str], batch_size: int) -> list[
     if len(texts) > 1 and hasattr(engine, "predict_batch"):
         try:
             raw = engine.predict_batch(texts, batch_size=batch_size)
-            for text, result in zip(texts, raw):
+            for text, result in zip(texts, raw, strict=False):
                 if isinstance(result, dict):
                     result["text"] = text[:200]
                     predictions.append(result)
@@ -845,6 +881,7 @@ def list_td_categories() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Tool 3b: classify_technical_debt_all — sweep every category model
 # ---------------------------------------------------------------------------
+
 
 def classify_technical_debt_all(
     texts: list[str],
@@ -898,7 +935,9 @@ def classify_technical_debt_all(
             if isinstance(class_probs, (list, tuple)) and len(class_probs) >= 2:
                 present_prob = float(class_probs[1] or 0.0)
             else:
-                present_prob = float(pred.get("predicted_probability", 0.0) or 0.0) if cls == 1 else 0.0
+                present_prob = (
+                    float(pred.get("predicted_probability", 0.0) or 0.0) if cls == 1 else 0.0
+                )
             per_text[i]["scores"][label] = round(present_prob, 3)
             if cls == 1:
                 per_text[i]["positive_categories"].append(label)
@@ -914,6 +953,7 @@ def classify_technical_debt_all(
 # ---------------------------------------------------------------------------
 # Tool 3c: classify_technical_debt_ensemble — weighted multi-model ensemble
 # ---------------------------------------------------------------------------
+
 
 def classify_technical_debt_ensemble(
     texts: list[str],
@@ -999,7 +1039,9 @@ def classify_technical_debt_ensemble(
                 # Fall through to torch / manual CPU ensemble below.
                 pass
         elif backend == "onnx":
-            return {"error": "OnnxEnsembleInferenceEngine unavailable: update tdsuite or use backend=torch"}
+            return {
+                "error": "OnnxEnsembleInferenceEngine unavailable: update tdsuite or use backend=torch"
+            }
 
     # PyTorch ensemble: explicit opt-in, or auto fallback when ONNX is missing.
     if backend in ("torch", "auto"):
@@ -1023,10 +1065,14 @@ def classify_technical_debt_ensemble(
             }
         except Exception:
             if backend == "torch":
-                return {"error": "PyTorch EnsembleInferenceEngine unavailable: install the torch extra"}
+                return {
+                    "error": "PyTorch EnsembleInferenceEngine unavailable: install the torch extra"
+                }
             # auto: fall through to the manual CPU ensemble below.
 
-    return _ensemble_predict_cpu(all_models, texts, weights, device, backend="auto", batch_size=batch_size)
+    return _ensemble_predict_cpu(
+        all_models, texts, weights, device, backend="auto", batch_size=batch_size
+    )
 
 
 def _ensemble_predict_cpu(
@@ -1055,7 +1101,7 @@ def _ensemble_predict_cpu(
     per_model: list[dict] = []
     model_errors: list[dict] = []
 
-    for model, weight in zip(models, norm_weights):
+    for model, weight in zip(models, norm_weights, strict=False):
         result = classify_technical_debt(
             texts, model_path=model, device=device, backend=backend, batch_size=batch_size
         )
@@ -1078,21 +1124,27 @@ def _ensemble_predict_cpu(
                 present = float(pred.get("predicted_probability", 0.0) or 0.0) if cls == 1 else 0.0
             accum[i] += weight * present
             contributions.append(round(present, 3))
-        per_model.append({"model": model, "weight": round(weight, 3), "present_probabilities": contributions})
+        per_model.append(
+            {"model": model, "weight": round(weight, 3), "present_probabilities": contributions}
+        )
 
     if not per_model:
-        return {"error": "TD ensemble backend unavailable: no models could be loaded",
-                "model_errors": model_errors}
+        return {
+            "error": "TD ensemble backend unavailable: no models could be loaded",
+            "model_errors": model_errors,
+        }
 
     predictions = []
     for i, text in enumerate(texts):
         prob = round(accum[i], 3)
-        predictions.append({
-            "text": text[:200],
-            "predicted_class": 1 if prob >= 0.5 else 0,
-            "predicted_probability": prob if prob >= 0.5 else round(1.0 - prob, 3),
-            "ensemble_present_probability": prob,
-        })
+        predictions.append(
+            {
+                "text": text[:200],
+                "predicted_class": 1 if prob >= 0.5 else 0,
+                "predicted_probability": prob if prob >= 0.5 else round(1.0 - prob, 3),
+                "ensemble_present_probability": prob,
+            }
+        )
 
     return {
         "tool": "td_classify_ensemble",
@@ -1110,6 +1162,7 @@ def _ensemble_predict_cpu(
 # Tool 3d: GitHub issues -> TD classification pipeline
 # (mirrors tdsuite's fetch_github_issues.py + extract_issue_bodies.py scripts)
 # ---------------------------------------------------------------------------
+
 
 def fetch_github_issues(
     repo: str,
@@ -1148,14 +1201,22 @@ def fetch_github_issues(
             resp = requests.get(
                 base,
                 headers=headers,
-                params={"state": state, "per_page": per_page, "page": page,
-                        "sort": "created", "direction": "desc"},
+                params={
+                    "state": state,
+                    "per_page": per_page,
+                    "page": page,
+                    "sort": "created",
+                    "direction": "desc",
+                },
                 timeout=30,
             )
             if resp.status_code == 403 and "rate limit" in resp.text.lower():
                 return {"error": "GitHub rate limit exceeded; set GITHUB_TOKEN", "repo": repo}
             if resp.status_code != 200:
-                return {"error": f"GitHub API error {resp.status_code}: {resp.text[:200]}", "repo": repo}
+                return {
+                    "error": f"GitHub API error {resp.status_code}: {resp.text[:200]}",
+                    "repo": repo,
+                }
 
             batch = resp.json()
             if not batch:
@@ -1163,14 +1224,16 @@ def fetch_github_issues(
             for it in batch:
                 if "pull_request" in it:
                     continue  # skip PRs
-                issues.append({
-                    "number": it.get("number"),
-                    "title": it.get("title", ""),
-                    "body": it.get("body") or "",
-                    "state": it.get("state", ""),
-                    "labels": [lbl.get("name") for lbl in it.get("labels", [])],
-                    "created_at": it.get("created_at", ""),
-                })
+                issues.append(
+                    {
+                        "number": it.get("number"),
+                        "title": it.get("title", ""),
+                        "body": it.get("body") or "",
+                        "state": it.get("state", ""),
+                        "labels": [lbl.get("name") for lbl in it.get("labels", [])],
+                        "created_at": it.get("created_at", ""),
+                    }
+                )
                 if not fetch_all and len(issues) >= limit:
                     break
             if not fetch_all and len(issues) >= limit:
@@ -1230,26 +1293,38 @@ def classify_github_issues(
 
     bodies = extract_issue_bodies(fetched["issues"], min_length=min_length)
     if not bodies:
-        return {"tool": "github_issues_td", "repo": repo, "issues_fetched": fetched["count"],
-                "classified": 0, "results": [], "note": "No issue bodies met the minimum length."}
+        return {
+            "tool": "github_issues_td",
+            "repo": repo,
+            "issues_fetched": fetched["count"],
+            "classified": 0,
+            "results": [],
+            "note": "No issue bodies met the minimum length.",
+        }
 
     texts = [b["text"] for b in bodies]
     td = classify_technical_debt(texts, category=category, device=device, backend=backend)
     if "error" in td:
-        return {"tool": "github_issues_td", "repo": repo, "issues_fetched": fetched["count"],
-                "error": td["error"]}
+        return {
+            "tool": "github_issues_td",
+            "repo": repo,
+            "issues_fetched": fetched["count"],
+            "error": td["error"],
+        }
 
     results = []
-    for meta, pred in zip(bodies, td.get("predictions", [])):
-        results.append({
-            "number": meta["number"],
-            "title": meta["title"],
-            "text": (meta["text"][:200]),
-            "label": td.get("label"),
-            "predicted_class": pred.get("predicted_class"),
-            "predicted_probability": pred.get("predicted_probability"),
-            "error": pred.get("error"),
-        })
+    for meta, pred in zip(bodies, td.get("predictions", []), strict=False):
+        results.append(
+            {
+                "number": meta["number"],
+                "title": meta["title"],
+                "text": (meta["text"][:200]),
+                "label": td.get("label"),
+                "predicted_class": pred.get("predicted_class"),
+                "predicted_probability": pred.get("predicted_probability"),
+                "error": pred.get("error"),
+            }
+        )
 
     return {
         "tool": "github_issues_td",
@@ -1269,6 +1344,7 @@ def classify_github_issues(
 # optional deps (torch, onnx) are guarded with clear error messages.
 # ---------------------------------------------------------------------------
 
+
 def _load_td_split_data_fn():
     """
     Resolve tdsuite's ``split_data`` function.
@@ -1279,6 +1355,7 @@ def _load_td_split_data_fn():
     """
     try:
         from tdsuite.data.data_splitter import split_data
+
         return split_data
     except Exception:
         pass
@@ -1286,7 +1363,9 @@ def _load_td_split_data_fn():
         import importlib.util
         import sys
         import types
+
         import tdsuite
+
         fp = Path(tdsuite.__file__).parent / "data" / "data_splitter.py"
         if not fp.exists():
             return None
@@ -1383,6 +1462,7 @@ def td_export_onnx(
 
     try:
         import torch
+
         out_dir = os.path.dirname(os.path.abspath(output))
         os.makedirs(out_dir, exist_ok=True)
 
@@ -1392,8 +1472,10 @@ def td_export_onnx(
 
         dummy = tokenizer(
             "dummy input for onnx export",
-            return_tensors="pt", padding="max_length",
-            truncation=True, max_length=max_length,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+            max_length=max_length,
         )
         input_names = list(dummy.keys())
         dynamic_axes = {n: {0: "batch", 1: "sequence"} for n in input_names}
@@ -1457,16 +1539,26 @@ def td_train(
         return {"error": f"tdsuite training entry point unavailable: {e}"}
 
     argv = [
-        "--data_file", str(data_file),
-        "--model_name", str(model_name),
-        "--output_dir", str(output_dir),
-        "--num_epochs", str(num_epochs),
-        "--batch_size", str(batch_size),
-        "--learning_rate", str(learning_rate),
-        "--max_length", str(max_length),
-        "--text_column", text_column,
-        "--label_column", label_column,
-        "--seed", str(seed),
+        "--data_file",
+        str(data_file),
+        "--model_name",
+        str(model_name),
+        "--output_dir",
+        str(output_dir),
+        "--num_epochs",
+        str(num_epochs),
+        "--batch_size",
+        str(batch_size),
+        "--learning_rate",
+        str(learning_rate),
+        "--max_length",
+        str(max_length),
+        "--text_column",
+        text_column,
+        "--label_column",
+        label_column,
+        "--seed",
+        str(seed),
     ]
     if positive_category:
         argv += ["--positive_category", positive_category]
@@ -1480,6 +1572,7 @@ def td_train(
         argv += ["--device", device]
 
     import sys
+
     old_argv = sys.argv
     try:
         sys.argv = ["tdsuite-train"] + argv
@@ -1492,12 +1585,18 @@ def td_train(
     finally:
         sys.argv = old_argv
 
-    return {"tool": "td_train", "output_dir": output_dir, "model_name": model_name, "status": "completed"}
+    return {
+        "tool": "td_train",
+        "output_dir": output_dir,
+        "model_name": model_name,
+        "status": "completed",
+    }
 
 
 # ---------------------------------------------------------------------------
 # Tool 4: read_file
 # ---------------------------------------------------------------------------
+
 
 def read_file(file_path: str, max_lines: int | None = None) -> dict[str, Any]:
     """Read a Python file and return its contents with line numbers."""
@@ -1513,7 +1612,7 @@ def read_file(file_path: str, max_lines: int | None = None) -> dict[str, Any]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         truncated = len(lines) > max_lines
         # Add line numbers
-        numbered = "\n".join(f"{i+1:4d} | {line}" for i, line in enumerate(lines[:max_lines]))
+        numbered = "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:max_lines]))
         return {
             "tool": "read_file",
             "file": str(path.resolve()),
@@ -1529,6 +1628,7 @@ def read_file(file_path: str, max_lines: int | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Tool 5: list_python_files
 # ---------------------------------------------------------------------------
+
 
 def list_python_files(
     directory: str,
@@ -1552,12 +1652,14 @@ def list_python_files(
             size = f.stat().st_size
         except Exception:
             size = 0
-        files.append({
-            "path": str(f.relative_to(target)),
-            "abs_path": str(f),
-            "size_bytes": size,
-            "size_kb": round(size / 1024, 1),
-        })
+        files.append(
+            {
+                "path": str(f.relative_to(target)),
+                "abs_path": str(f),
+                "size_bytes": size,
+                "size_kb": round(size / 1024, 1),
+            }
+        )
 
     return {
         "tool": "list_python_files",
@@ -1570,6 +1672,7 @@ def list_python_files(
 # ---------------------------------------------------------------------------
 # Tool 6: analyze_code_intelligence
 # ---------------------------------------------------------------------------
+
 
 def analyze_code_intelligence(
     path: str,
@@ -1647,8 +1750,7 @@ def analyze_code_intelligence(
         graph = ci.build_import_graph(intel_map)
         result["import_graph"] = {
             os.path.relpath(fp, root): [
-                {"module": e.module, "names": e.names, "line": e.line}
-                for e in edges
+                {"module": e.module, "names": e.names, "line": e.line} for e in edges
             ]
             for fp, edges in graph.items()
         }
@@ -1681,8 +1783,15 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path to .py file or project directory"},
-                    "ignore_dirs": {"type": "array", "items": {"type": "string"}, "description": "Dirs to skip"},
+                    "path": {
+                        "type": "string",
+                        "description": "Path to .py file or project directory",
+                    },
+                    "ignore_dirs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Dirs to skip",
+                    },
                 },
                 "required": ["path"],
             },
@@ -1701,7 +1810,10 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path to .py file or project directory"},
+                    "path": {
+                        "type": "string",
+                        "description": "Path to .py file or project directory",
+                    },
                     "analysis_type": {
                         "type": "string",
                         "enum": ["code", "architectural", "structural", "all"],
@@ -1738,10 +1850,13 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                     "category": {
                         "type": "string",
                         "description": "Debt category: general (default), code, design, test, "
-                                       "security, documentation, defect, requirement, build, "
-                                       "performance, usability, maintainability, reliability, etc.",
+                        "security, documentation, defect, requirement, build, "
+                        "performance, usability, maintainability, reliability, etc.",
                     },
-                    "model_path": {"type": "string", "description": "HuggingFace model ID or local path"},
+                    "model_path": {
+                        "type": "string",
+                        "description": "HuggingFace model ID or local path",
+                    },
                     "device": {"type": "string", "enum": ["cpu", "cuda", "mps"]},
                 },
                 "required": ["texts"],
@@ -1762,7 +1877,10 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "repo": {"type": "string", "description": "Repository in 'owner/repo' format"},
-                    "category": {"type": "string", "description": "Debt category (see classify_technical_debt)"},
+                    "category": {
+                        "type": "string",
+                        "description": "Debt category (see classify_technical_debt)",
+                    },
                     "state": {"type": "string", "enum": ["open", "closed", "all"]},
                     "limit": {"type": "integer", "description": "Max issues to fetch (default 50)"},
                 },
@@ -1779,7 +1897,10 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string"},
-                    "max_lines": {"type": "integer", "description": "Max lines to return (default: 500)"},
+                    "max_lines": {
+                        "type": "integer",
+                        "description": "Max lines to return (default: 500)",
+                    },
                 },
                 "required": ["file_path"],
             },
@@ -1813,11 +1934,26 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File or project directory"},
-                    "symbol": {"type": "string", "description": "Look up definitions of this symbol"},
-                    "find_usages_of": {"type": "string", "description": "Find all usages of this symbol"},
-                    "import_graph": {"type": "boolean", "description": "Include import dependency graph"},
-                    "metrics_only": {"type": "boolean", "description": "Return only function metrics"},
-                    "top_n": {"type": "integer", "description": "Limit metrics to top N by complexity"},
+                    "symbol": {
+                        "type": "string",
+                        "description": "Look up definitions of this symbol",
+                    },
+                    "find_usages_of": {
+                        "type": "string",
+                        "description": "Find all usages of this symbol",
+                    },
+                    "import_graph": {
+                        "type": "boolean",
+                        "description": "Include import dependency graph",
+                    },
+                    "metrics_only": {
+                        "type": "boolean",
+                        "description": "Return only function metrics",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Limit metrics to top N by complexity",
+                    },
                     "ignore_dirs": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["path"],
@@ -1857,7 +1993,9 @@ def execute_tool(name: str, inputs: dict[str, Any]) -> str:
         result = fn(**inputs)
         return json.dumps(result, default=str, indent=2)
     except Exception as exc:
-        return json.dumps({
-            "error": str(exc),
-            "traceback": traceback.format_exc(),
-        })
+        return json.dumps(
+            {
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+        )

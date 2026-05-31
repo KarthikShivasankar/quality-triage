@@ -17,17 +17,18 @@ from urllib.parse import urlparse
 @dataclass
 class ClonedRepo:
     url: str
-    local_path: str       # absolute path to the cloned directory
-    repo_name: str        # "owner/repo"
+    local_path: str  # absolute path to the cloned directory
+    repo_name: str  # "owner/repo"
     branch: str | None
-    commit_sha: str       # HEAD SHA after clone
-    is_temp: bool         # True if we should delete on cleanup
+    commit_sha: str  # HEAD SHA after clone
+    is_temp: bool  # True if we should delete on cleanup
 
 
 def is_github_url(path_or_url: str) -> bool:
     """Return True if the string is a GitHub URL (not a local path)."""
-    return bool(re.match(r"https?://(www\.)?github\.com/", path_or_url.strip())) or \
-           bool(re.match(r"git@github\.com:", path_or_url.strip()))
+    return bool(re.match(r"https?://(www\.)?github\.com/", path_or_url.strip())) or bool(
+        re.match(r"git@github\.com:", path_or_url.strip())
+    )
 
 
 def parse_github_url(url: str) -> tuple[str, str | None, str | None]:
@@ -128,21 +129,23 @@ def clone_repo(
     if result.returncode != 0:
         if is_temp:
             shutil.rmtree(target_dir, ignore_errors=True)
-        raise RuntimeError(
-            f"git clone failed (exit {result.returncode}):\n{result.stderr.strip()}"
-        )
+        raise RuntimeError(f"git clone failed (exit {result.returncode}):\n{result.stderr.strip()}")
 
     # Get HEAD SHA
     sha_result = subprocess.run(
         ["git", "-C", target_dir, "rev-parse", "HEAD"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     commit_sha = sha_result.stdout.strip() if sha_result.returncode == 0 else "unknown"
 
     # Resolve actual branch
     branch_result = subprocess.run(
         ["git", "-C", target_dir, "rev-parse", "--abbrev-ref", "HEAD"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     actual_branch = branch_result.stdout.strip() if branch_result.returncode == 0 else branch
 

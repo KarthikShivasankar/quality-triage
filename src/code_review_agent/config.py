@@ -17,10 +17,10 @@ from typing import Any
 
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Typed sub-configs
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class OllamaConfig:
@@ -89,10 +89,20 @@ class TDClassifierConfig:
 
 @dataclass
 class ToolsConfig:
-    ignore_dirs: list[str] = field(default_factory=lambda: [
-        ".git", "__pycache__", "venv", ".venv", "node_modules",
-        "dist", "build", ".tox", ".eggs", "htmlcov",
-    ])
+    ignore_dirs: list[str] = field(
+        default_factory=lambda: [
+            ".git",
+            "__pycache__",
+            "venv",
+            ".venv",
+            "node_modules",
+            "dist",
+            "build",
+            ".tox",
+            ".eggs",
+            "htmlcov",
+        ]
+    )
     read_file_max_lines: int = 500
     td_classifier: TDClassifierConfig = field(default_factory=TDClassifierConfig)
 
@@ -125,14 +135,21 @@ class ReviewConfig:
     """
 
     # Detector families: ml | code | architectural | structural | td | code-intel
-    checks: list[str] = field(default_factory=lambda: [
-        "ml", "code", "architectural", "structural", "td", "code-intel",
-    ])
+    checks: list[str] = field(
+        default_factory=lambda: [
+            "ml",
+            "code",
+            "architectural",
+            "structural",
+            "td",
+            "code-intel",
+        ]
+    )
     td_categories: list[str] = field(default_factory=lambda: ["general"])
     min_severity: str = "low"
-    output_format: str = "markdown"   # markdown | json
-    suggest_fixes: bool = False       # ask the agent for machine-applicable fixes
-    apply_fixes: bool = False         # NEVER write without explicit confirmation
+    output_format: str = "markdown"  # markdown | json
+    suggest_fixes: bool = False  # ask the agent for machine-applicable fixes
+    apply_fixes: bool = False  # NEVER write without explicit confirmation
 
 
 @dataclass
@@ -153,6 +170,7 @@ class AppConfig:
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
+
 
 def _merge(base: dict, override: dict) -> dict:
     """Deep-merge override into base (override wins)."""
@@ -185,6 +203,7 @@ def _find_config(explicit: str | None = None) -> tuple[dict, str]:
 def _dc(cls, raw: dict):
     """Construct a dataclass from a dict, ignoring unknown keys."""
     import dataclasses
+
     known = {f.name for f in dataclasses.fields(cls)}
     return cls(**{k: v for k, v in raw.items() if k in known})
 

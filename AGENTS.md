@@ -8,10 +8,18 @@ Canonical behavior lives in:
 Claude Code operational details live in:
 - [`docs/claude-code.md`](docs/claude-code.md)
 
+Distribution name: **`quality-triage`** (PyPI). Installed CLI command:
+**`code-review`**. Import package: `code_review_agent`.
+
 ## Quick Agent Start
 
 ```bash
+# From PyPI:
+pip install quality-triage          # or: uv add quality-triage
+
+# From source (dev):
 uv sync
+
 code-review show-config
 code-review review ./my_project --output reports/review.md
 
@@ -19,6 +27,22 @@ code-review review ./my_project --output reports/review.md
 uv sync --extra web
 code-review-web        # http://127.0.0.1:8000  (or: uv run python -m code_review_agent.webapp.app)
 ```
+
+## Development, Lint & CI
+
+```bash
+uv sync --extra web --extra mcp --dev
+uv run ruff check src/            # lint (CI gate)
+uv run ruff format --check src/   # format (CI gate)
+uv run python -m pytest tests/ -q
+uv build                          # sdist + wheel
+```
+
+CI (`.github/workflows/ci.yml`) runs lint+format, the test suite on Python
+3.10/3.11/3.12, and a build+`twine check` job. Releases publish to PyPI via
+Trusted Publishing (OIDC) on `v*` tags (`.github/workflows/release.yml`); bump
+`version` in both `pyproject.toml` and `__init__.py` before tagging. See the
+README's *Maintaining the package* section for the full release runbook.
 
 ## Running Tests
 
