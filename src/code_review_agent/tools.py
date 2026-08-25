@@ -187,8 +187,14 @@ def detect_python_smells(
     cfg = get_config(config_path) if config_path else _get_cfg()
     ignore = ignore_dirs or cfg.tools.ignore_dirs
     code_thresh = dict(get_thresholds(cfg, "code_smells"))
-    # code_quality_analyzer.detect_comments KeyErrors without this key.
-    code_thresh.setdefault("LARGE_COMMENT_BLOCKS", 2)
+    for key, default in (
+        ("LARGE_COMMENT_BLOCKS", 2),
+        ("DIVERGENT_CHANGE_METHODS", 6),
+        ("SHOTGUN_SURGERY_CONTEXTS", 3),
+        ("LAZY_CLASS_LINES", 20),
+        ("DATA_CLASS_METHODS", 4),
+    ):
+        code_thresh.setdefault(key, default)
     arch_thresh = get_thresholds(cfg, "architectural_smells")
     struct_thresh = get_thresholds(cfg, "structural_smells")
 

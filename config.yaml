@@ -105,9 +105,15 @@ code_smells:
   DIVERGENT_CHANGE_PREFIXES:
     value: 4
     explanation: "Distinct method name prefix count threshold."
+  DIVERGENT_CHANGE_METHODS:
+    value: 6
+    explanation: "Minimum method count before divergent-change detection applies."
   SHOTGUN_SURGERY_CALLS:
     value: 5
     explanation: "Methods called in more than this many places."
+  SHOTGUN_SURGERY_CONTEXTS:
+    value: 3
+    explanation: "Distinct caller contexts before shotgun-surgery detection applies."
   EXCESSIVE_COMMENTS_RATIO:
     value: 0.3
     explanation: "Ratio of comment lines to total lines."
@@ -117,6 +123,12 @@ code_smells:
   LAZY_CLASS_METHODS:
     value: 4
     explanation: "Classes with this few methods or fewer are lazy."
+  LAZY_CLASS_LINES:
+    value: 20
+    explanation: "Maximum LOC for a lazy class."
+  DATA_CLASS_METHODS:
+    value: 4
+    explanation: "Getter/setter count threshold for data-class smell."
   FEATURE_ENVY_CALLS:
     value: 3
     explanation: "Calls to another object's methods threshold."

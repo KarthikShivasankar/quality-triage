@@ -666,6 +666,7 @@ def build_ui(config_path: str | None = None):
                     label="Saved reports",
                     choices=_archive_choices(cfg.report.output_dir),
                     value=None,
+                    allow_custom_value=True,
                     interactive=True,
                     elem_id="qt-archive",
                 )
