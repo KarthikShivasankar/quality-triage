@@ -11,10 +11,10 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _rel(abs_path: str, root: str) -> str:
     try:
@@ -42,14 +42,14 @@ def _python_files(path: Path, ignore: set[str]) -> list[Path]:
     if path.is_file() and path.suffix == ".py":
         return [path]
     return [
-        f for f in path.rglob("*.py")
-        if not any(part in ignore for part in f.parts)
+        f for f in path.rglob("*.py") if not any(part in ignore for part in f.parts)
     ]
 
 
 def _get_cfg():
     """Lazy import of config to avoid circular imports."""
     from code_review_agent.config import get_config
+
     return get_config()
 
 
@@ -66,6 +66,7 @@ def _smell_to_dict(obj: Any) -> dict:
 # ---------------------------------------------------------------------------
 # Tool 1: detect_ml_smells
 # ---------------------------------------------------------------------------
+
 
 def detect_ml_smells(
     path: str,
@@ -123,10 +124,16 @@ def detect_ml_smells(
 
                     # Enrich column info where missing
                     for smell in smell_list:
-                        if isinstance(smell, dict) and smell.get("line_number") and not smell.get("col"):
+                        if (
+                            isinstance(smell, dict)
+                            and smell.get("line_number")
+                            and not smell.get("col")
+                        ):
                             snippet = smell.get("code_snippet", "")
                             if snippet:
-                                col = _enrich_column(file_str, smell["line_number"], snippet)
+                                col = _enrich_column(
+                                    file_str, smell["line_number"], snippet
+                                )
                                 if col:
                                     smell["col"] = col
 
@@ -135,7 +142,11 @@ def detect_ml_smells(
             except Exception as exc:
                 results["errors"].append({"file": file_str, "error": str(exc)})
 
-    total_smells = sum(len(e["smells"]) for key in ("framework_smells", "huggingface_smells", "general_ml_smells") for e in results[key])
+    total_smells = sum(
+        len(e["smells"])
+        for key in ("framework_smells", "huggingface_smells", "general_ml_smells")
+        for e in results[key]
+    )
     results["summary"] = {
         "files_analyzed": len(py_files),
         "total_smells": total_smells,
@@ -150,6 +161,7 @@ def detect_ml_smells(
 # Tool 2: detect_python_smells
 # ---------------------------------------------------------------------------
 
+
 def detect_python_smells(
     path: str,
     analysis_type: str = "all",
@@ -159,8 +171,8 @@ def detect_python_smells(
     """Detect code, architectural, and structural smells using code_quality_analyzer."""
     try:
         from code_quality_analyzer import (
-            CodeSmellDetector,
             ArchitecturalSmellDetector,
+            CodeSmellDetector,
             StructuralSmellDetector,
         )
     except ImportError as e:
@@ -170,12 +182,12 @@ def detect_python_smells(
     if not target.exists():
         return {"error": f"Path does not exist: {path}"}
 
-    cfg = _get_cfg()
-    ignore = ignore_dirs or cfg.tools.ignore_dirs
+    from code_review_agent.config import get_config, get_thresholds
 
-    from code_review_agent.config import get_thresholds
+    cfg = get_config(config_path) if config_path else _get_cfg()
+    ignore = ignore_dirs or cfg.tools.ignore_dirs
     code_thresh = get_thresholds(cfg, "code_smells")
-    arch_thresh  = get_thresholds(cfg, "architectural_smells")
+    arch_thresh = get_thresholds(cfg, "architectural_smells")
     struct_thresh = get_thresholds(cfg, "structural_smells")
 
     results: dict[str, Any] = {
@@ -188,13 +200,23 @@ def detect_python_smells(
     # ---- Code smells ----
     if analysis_type in ("code", "all"):
         try:
-            det = CodeSmellDetector(thresholds=code_thresh) if code_thresh else CodeSmellDetector()
+            det = (
+                CodeSmellDetector(thresholds=code_thresh)
+                if code_thresh
+                else CodeSmellDetector()
+            )
             py_files = _python_files(target, set(ignore))
             for py_file in py_files:
                 try:
                     det.detect_smells(str(py_file))
                 except Exception as exc:
-                    results["errors"].append({"file": str(py_file), "phase": "code_smells", "error": str(exc)})
+                    results["errors"].append(
+                        {
+                            "file": str(py_file),
+                            "phase": "code_smells",
+                            "error": str(exc),
+                        }
+                    )
             try:
                 det.detect_cross_file_smells()
             except Exception:
@@ -206,16 +228,26 @@ def detect_python_smells(
     # ---- Architectural smells ----
     if analysis_type in ("architectural", "all") and target.is_dir():
         try:
-            det = ArchitecturalSmellDetector(thresholds=arch_thresh) if arch_thresh else ArchitecturalSmellDetector()
+            det = (
+                ArchitecturalSmellDetector(thresholds=arch_thresh)
+                if arch_thresh
+                else ArchitecturalSmellDetector()
+            )
             det.analyze_directory(str(target), ignore)
-            results["architectural_smells"] = _extract_smell_list(det, "architectural_smells")
+            results["architectural_smells"] = _extract_smell_list(
+                det, "architectural_smells"
+            )
         except Exception as exc:
             results["architectural_smells"] = {"error": str(exc)}
 
     # ---- Structural smells ----
     if analysis_type in ("structural", "all"):
         try:
-            det = StructuralSmellDetector(thresholds=struct_thresh) if struct_thresh else StructuralSmellDetector()
+            det = (
+                StructuralSmellDetector(thresholds=struct_thresh)
+                if struct_thresh
+                else StructuralSmellDetector()
+            )
             if target.is_dir():
                 det.detect_smells(str(target), ignore)
             else:
@@ -239,7 +271,9 @@ def _extract_smell_list(detector: Any, attr: str) -> list[dict]:
                 return list(val.values())
     # Fallback: print_report to string
     try:
-        import io, contextlib
+        import contextlib
+        import io
+
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             detector.print_report()
@@ -254,19 +288,24 @@ def _extract_smell_list(detector: Any, attr: str) -> list[dict]:
 # We load onnx_inference.py directly from disk to bypass the broken __init__.
 # ---------------------------------------------------------------------------
 
+
 def _load_tdsuite_onnx_cls():
     """Return OnnxInferenceEngine class, bypassing tdsuite.utils.__init__."""
-    import importlib.util
     import importlib
+    import importlib.util
+
     spec = importlib.util.find_spec("tdsuite")
     if spec is None:
         raise ImportError("tdsuite is not installed")
     import pathlib
+
     tdsuite_root = pathlib.Path(spec.origin).parent
     onnx_file = tdsuite_root / "utils" / "onnx_inference.py"
     if not onnx_file.exists():
         raise ImportError(f"tdsuite ONNX module not found at {onnx_file}")
-    mod_spec = importlib.util.spec_from_file_location("_tdsuite_onnx_inference", onnx_file)
+    mod_spec = importlib.util.spec_from_file_location(
+        "_tdsuite_onnx_inference", onnx_file
+    )
     mod = importlib.util.module_from_spec(mod_spec)
     mod_spec.loader.exec_module(mod)
     return mod.OnnxInferenceEngine
@@ -274,17 +313,21 @@ def _load_tdsuite_onnx_cls():
 
 def _load_tdsuite_torch_cls():
     """Return InferenceEngine (PyTorch) class."""
-    import importlib.util
     import importlib
+    import importlib.util
+
     spec = importlib.util.find_spec("tdsuite")
     if spec is None:
         raise ImportError("tdsuite is not installed")
     import pathlib
+
     tdsuite_root = pathlib.Path(spec.origin).parent
     torch_file = tdsuite_root / "utils" / "inference.py"
     if not torch_file.exists():
         raise ImportError(f"tdsuite torch inference module not found at {torch_file}")
-    mod_spec = importlib.util.spec_from_file_location("_tdsuite_torch_inference", torch_file)
+    mod_spec = importlib.util.spec_from_file_location(
+        "_tdsuite_torch_inference", torch_file
+    )
     mod = importlib.util.module_from_spec(mod_spec)
     mod_spec.loader.exec_module(mod)
     return mod.InferenceEngine
@@ -296,11 +339,14 @@ def _export_hf_model_to_onnx(model_path: str) -> str:
     Used when the model's HF-hosted model.onnx has broken external data references.
     Caches the exported ONNX under ~/.cache/td_onnx_export/.
     """
-    import torch
     from pathlib import Path
+
+    import torch
     from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-    cache_dir = Path.home() / ".cache" / "td_onnx_export" / model_path.replace("/", "__")
+    cache_dir = (
+        Path.home() / ".cache" / "td_onnx_export" / model_path.replace("/", "__")
+    )
     onnx_path = cache_dir / "model.onnx"
 
     if not onnx_path.exists():
@@ -310,8 +356,11 @@ def _export_hf_model_to_onnx(model_path: str) -> str:
         model.eval()
 
         dummy = tokenizer(
-            "test input", return_tensors="pt",
-            padding="max_length", max_length=512, truncation=True,
+            "test input",
+            return_tensors="pt",
+            padding="max_length",
+            max_length=512,
+            truncation=True,
         )
         input_names = list(dummy.keys())
 
@@ -368,7 +417,9 @@ def _load_td_torch_engine(model_path: str, device: str):
     try:
         InferenceEngine = _load_tdsuite_torch_cls()
     except ImportError as e:
-        return {"error": f"tdsuite PyTorch inference not available (install tdsuite[gpu]): {e}"}
+        return {
+            "error": f"tdsuite PyTorch inference not available (install tdsuite[gpu]): {e}"
+        }
     try:
         return InferenceEngine(model_path=model_path, device=device)
     except Exception as exc:
@@ -378,6 +429,7 @@ def _load_td_torch_engine(model_path: str, device: str):
 # ---------------------------------------------------------------------------
 # Tool 3: classify_technical_debt
 # ---------------------------------------------------------------------------
+
 
 def classify_technical_debt(
     texts: list[str],
@@ -433,6 +485,7 @@ def classify_technical_debt(
 # Tool 4: read_file
 # ---------------------------------------------------------------------------
 
+
 def read_file(file_path: str, max_lines: int | None = None) -> dict[str, Any]:
     """Read a Python file and return its contents with line numbers."""
     cfg = _get_cfg()
@@ -447,7 +500,9 @@ def read_file(file_path: str, max_lines: int | None = None) -> dict[str, Any]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         truncated = len(lines) > max_lines
         # Add line numbers
-        numbered = "\n".join(f"{i+1:4d} | {line}" for i, line in enumerate(lines[:max_lines]))
+        numbered = "\n".join(
+            f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:max_lines])
+        )
         return {
             "tool": "read_file",
             "file": str(path.resolve()),
@@ -463,6 +518,7 @@ def read_file(file_path: str, max_lines: int | None = None) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Tool 5: list_python_files
 # ---------------------------------------------------------------------------
+
 
 def list_python_files(
     directory: str,
@@ -486,12 +542,14 @@ def list_python_files(
             size = f.stat().st_size
         except Exception:
             size = 0
-        files.append({
-            "path": str(f.relative_to(target)),
-            "abs_path": str(f),
-            "size_bytes": size,
-            "size_kb": round(size / 1024, 1),
-        })
+        files.append(
+            {
+                "path": str(f.relative_to(target)),
+                "abs_path": str(f),
+                "size_bytes": size,
+                "size_kb": round(size / 1024, 1),
+            }
+        )
 
     return {
         "tool": "list_python_files",
@@ -504,6 +562,7 @@ def list_python_files(
 # ---------------------------------------------------------------------------
 # Tool 6: analyze_code_intelligence
 # ---------------------------------------------------------------------------
+
 
 def analyze_code_intelligence(
     path: str,
@@ -581,8 +640,7 @@ def analyze_code_intelligence(
         graph = ci.build_import_graph(intel_map)
         result["import_graph"] = {
             os.path.relpath(fp, root): [
-                {"module": e.module, "names": e.names, "line": e.line}
-                for e in edges
+                {"module": e.module, "names": e.names, "line": e.line} for e in edges
             ]
             for fp, edges in graph.items()
         }
@@ -615,8 +673,15 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path to .py file or project directory"},
-                    "ignore_dirs": {"type": "array", "items": {"type": "string"}, "description": "Dirs to skip"},
+                    "path": {
+                        "type": "string",
+                        "description": "Path to .py file or project directory",
+                    },
+                    "ignore_dirs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Dirs to skip",
+                    },
                 },
                 "required": ["path"],
             },
@@ -635,7 +700,10 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Path to .py file or project directory"},
+                    "path": {
+                        "type": "string",
+                        "description": "Path to .py file or project directory",
+                    },
                     "analysis_type": {
                         "type": "string",
                         "enum": ["code", "architectural", "structural", "all"],
@@ -663,9 +731,16 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                         "items": {"type": "string"},
                         "description": "Text snippets to classify",
                     },
-                    "model_path": {"type": "string", "description": "HuggingFace model ID or local path"},
+                    "model_path": {
+                        "type": "string",
+                        "description": "HuggingFace model ID or local path",
+                    },
                     "device": {"type": "string", "enum": ["cpu", "cuda", "mps"]},
-                    "backend": {"type": "string", "enum": ["onnx", "torch"], "description": "Inference backend: 'onnx' (default, CPU, no PyTorch) or 'torch'"},
+                    "backend": {
+                        "type": "string",
+                        "enum": ["onnx", "torch"],
+                        "description": "Inference backend: 'onnx' (default, CPU, no PyTorch) or 'torch'",
+                    },
                 },
                 "required": ["texts"],
             },
@@ -680,7 +755,10 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "file_path": {"type": "string"},
-                    "max_lines": {"type": "integer", "description": "Max lines to return (default: 500)"},
+                    "max_lines": {
+                        "type": "integer",
+                        "description": "Max lines to return (default: 500)",
+                    },
                 },
                 "required": ["file_path"],
             },
@@ -713,12 +791,30 @@ TOOL_DEFINITIONS_OPENAI: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File or project directory"},
-                    "symbol": {"type": "string", "description": "Look up definitions of this symbol"},
-                    "find_usages_of": {"type": "string", "description": "Find all usages of this symbol"},
-                    "import_graph": {"type": "boolean", "description": "Include import dependency graph"},
-                    "metrics_only": {"type": "boolean", "description": "Return only function metrics"},
-                    "top_n": {"type": "integer", "description": "Limit metrics to top N by complexity"},
+                    "path": {
+                        "type": "string",
+                        "description": "File or project directory",
+                    },
+                    "symbol": {
+                        "type": "string",
+                        "description": "Look up definitions of this symbol",
+                    },
+                    "find_usages_of": {
+                        "type": "string",
+                        "description": "Find all usages of this symbol",
+                    },
+                    "import_graph": {
+                        "type": "boolean",
+                        "description": "Include import dependency graph",
+                    },
+                    "metrics_only": {
+                        "type": "boolean",
+                        "description": "Return only function metrics",
+                    },
+                    "top_n": {
+                        "type": "integer",
+                        "description": "Limit metrics to top N by complexity",
+                    },
                     "ignore_dirs": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["path"],
@@ -751,7 +847,9 @@ def execute_tool(name: str, inputs: dict[str, Any]) -> str:
         result = fn(**inputs)
         return json.dumps(result, default=str, indent=2)
     except Exception as exc:
-        return json.dumps({
-            "error": str(exc),
-            "traceback": traceback.format_exc(),
-        })
+        return json.dumps(
+            {
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+        )

@@ -4,45 +4,58 @@ build-backend = "hatchling.build"
 
 [project]
 name = "code-review-agent"
-version = "0.1.0"
-description = "AI-powered code review agent using ML smell detection, Python smell detection, and technical debt classification"
+version = "0.2.0"
+description = "AI-powered code review CLI: deterministic smell detection plus LiteLLM synthesis across local and frontier models"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "anthropic>=0.40.0",
-    "openai>=1.0.0",
+    "litellm>=1.90.0",
+    "click>=8.1",
+    "rich>=13.7",
+    "rich-click>=1.8",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
     "ml-code-smell-detector",
     "tdsuite",
     "code-quality-analyzer",
-    "click>=8.0",
-    "rich>=13.0",
-    "pyyaml>=6.0",
     "onnxruntime>=1.16.0",
+]
+
+[project.optional-dependencies]
+td-torch = [
     "torch>=2.0.0",
     "onnxscript>=0.1.0",
+]
+ui = [
+    "gradio>=5.20,<6",
 ]
 
 [project.scripts]
 code-review = "code_review_agent.cli:main"
 
 [tool.uv.sources]
-ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", branch = "dev" }
-tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", branch = "main" }
-code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", branch = "dev" }
+ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", rev = "b2681cb74c671e3cd588ed77e5bb2db695466e5f" }
+tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", rev = "bb83e603eb6bc831c5284e8377583aeb610a43ec" }
+code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", rev = "d11579533a775949912793a6412a94ec5244e837" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/code_review_agent"]
 
 [dependency-groups]
 dev = [
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-    "ruff>=0.1.0",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.8",
+    "gradio>=5.20,<6",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v"
+markers = [
+    "integration: tests that require a live LLM (set QUALITY_TRIAGE_LIVE_LLM=1)",
+    "e2e: live GitHub clone + pipeline (needs network; skip with QUALITY_TRIAGE_SKIP_E2E=1)",
+]
 
 [tool.coverage.run]
 source = ["src/code_review_agent"]
@@ -50,3 +63,12 @@ omit = ["*/__pycache__/*"]
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]

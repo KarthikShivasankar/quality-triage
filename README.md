@@ -1,356 +1,195 @@
-# Quality Triage — AI-Powered Code Review Agent
+# Quality Triage — Python quality review CLI
 
-An agentic code review tool that combines ML-based smell detection, AST analysis, and LLM synthesis to produce structured, actionable code quality reports with exact `file:line:col` locations.
+Deterministic Python quality analysis (ML smells, architecture smells, AST intelligence, technical-debt classification) plus optional **LiteLLM** synthesis. Switch between local models and frontier APIs with one `--model` flag.
 
-## Run with Claude Code
+The **CLI is the product**. Gradio is an optional companion that runs the same pipeline.
 
-If you are using Claude Code (or any AI coding agent), start here:
+Agent contract: [`AGENTS.md`](AGENTS.md)
 
-- Canonical agent contract: [`skills.md`](skills.md)
-- Claude-specific playbook: [`docs/claude-code.md`](docs/claude-code.md)
-- Cross-agent portability notes: [`docs/agent-interop.md`](docs/agent-interop.md)
-- Reusable command/prompt snippets: [`scripts/agent_review_examples.md`](scripts/agent_review_examples.md)
+## Requirements
 
-Minimal bootstrap:
-
-```bash
-uv sync
-code-review show-config
-code-review review ./my_project --output reports/review.md
-```
-
-## Overview
-
-Quality Triage runs a multi-step agentic loop to review Python codebases:
-
-1. **List files** — maps the project structure
-2. **AST code intelligence** — identifies complexity hotspots, cyclomatic complexity, import cycles
-3. **Python smell detection** — code, architectural, and structural smells
-4. **ML smell detection** — data leakage, reproducibility issues, framework anti-patterns
-5. **Technical debt classification** — classifies TODO/FIXME comments into 18 debt categories
-6. **LLM synthesis** — generates a structured report with prioritised recommendations
-
-Supports two backends: **Ollama** (default, no API key) and **Anthropic Claude**.
-
-## Features
-
-- Detects **ML anti-patterns**: data leakage, missing random seeds, Pandas/NumPy inefficiencies, PyTorch/TensorFlow misuse, HuggingFace API errors
-- Detects **Python code smells**: long methods, large classes, duplicate code, feature envy, cyclic dependencies, god objects, high cyclomatic complexity
-- **Technical debt classification** via a transformer model (18 categories)
-- **AST code intelligence**: symbol lookup, find-usages, import dependency graph, per-function metrics
-- Reviews **local paths or GitHub URLs** (auto-clones, then cleans up)
-- Streams output in real time to the terminal
-- Saves reports to file with `--output`
-
-## Installation
-
-Requires Python ≥ 3.9 and [`uv`](https://docs.astral.sh/uv/).
+- Python **≥ 3.10**
+- [`uv`](https://docs.astral.sh/uv/)
+- Optional: [Ollama](https://ollama.com) (default local backend) or API keys for OpenAI / Anthropic / Groq / Gemini / Azure
 
 ```bash
 git clone https://github.com/KarthikShivasankar/quality-triage.git
 cd quality-triage
-
-# Install all dependencies (including git-sourced packages)
 uv sync
-
-# Activate the virtual environment
 source .venv/bin/activate
 ```
 
-> **Note:** Three dependencies are installed from GitHub:
-> - `ml-code-smell-detector` — [KarthikShivasankar/ml_smells_detector](https://github.com/KarthikShivasankar/ml_smells_detector)
-> - `code-quality-analyzer` — [KarthikShivasankar/python_smells_detector](https://github.com/KarthikShivasankar/python_smells_detector)
-> - `tdsuite` — [KarthikShivasankar/text_classification](https://github.com/KarthikShivasankar/text_classification)
-
-## Quick Start
+Default local model is a small Hugging Face GGUF served by Ollama (~1.7 GB, completion-only — hybrid review, not `--agentic`):
 
 ```bash
-# Review a local project (uses Ollama by default)
-code-review review ./my_project
-
-# Review a GitHub repository
-code-review review https://github.com/owner/repo
-
-# Review with Anthropic Claude (requires ANTHROPIC_API_KEY)
-export ANTHROPIC_API_KEY=sk-...
-code-review review ./my_project --provider anthropic
-
-# Save the report to a file
-code-review review ./my_project --output report.md
+ollama pull hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
 ```
+
+LiteLLM string: `ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M` (aliases `local` and `test`).
+
+PyTorch TD backend (only if you need `backend: torch`):
+
+```bash
+uv sync --extra td-torch
+```
+
+Git-sourced detectors are pinned to commit SHAs in `pyproject.toml`:
+
+- `ml-code-smell-detector` — [ml_smells_detector](https://github.com/KarthikShivasankar/ml_smells_detector)
+- `code-quality-analyzer` — [python_smells_detector](https://github.com/KarthikShivasankar/python_smells_detector)
+- `tdsuite` — [text_classification](https://github.com/KarthikShivasankar/text_classification)
+
+## Quick start
+
+```bash
+# Detectors first, then LiteLLM narrative (TTY dashboard; write the full report)
+code-review review ./my_project --output reports/review.md
+
+# Pipeline only — no LLM, JSON out, fail CI on high+ findings
+code-review review ./src --no-llm --format json --fail-on high --output reports/review.json
+
+# HTML inspection slip
+code-review review ./src --no-llm --format html --output reports/review.html
+
+# GitHub URL (optional /tree/branch/subpath). Clone also fetches recent open issues for TD.
+code-review review https://github.com/pypa/sampleproject/tree/main/src --no-llm --format json --output reports/review.json
+code-review run-tool list-files https://github.com/pypa/sampleproject/tree/main/src
+
+# Frontier model via LiteLLM
+export ANTHROPIC_API_KEY=sk-ant-...
+code-review review ./src --model frontier
+
+# Custom OpenAI-compatible server (vLLM, LM Studio, llama.cpp)
+code-review review ./src --model openai/my-model --api-base http://127.0.0.1:8000/v1
+```
+
+A TTY review prints a health score and top findings. Pass `--output` for the full report; `-v` prints full markdown.
+
+## How review works
+
+Default path is **hybrid**:
+
+1. List Python files
+2. AST code intelligence (complexity, imports, symbols)
+3. Python code / architecture / structural smells
+4. ML anti-patterns
+5. Classify TODO/FIXME/HACK comments (GitHub clones also classify up to 10 recent open issues; cap 30)
+6. Normalize into structured findings
+7. LiteLLM writes executive summary + roadmap from that JSON (skip with `--no-llm`)
+
+`--agentic` restores the older LLM-orchestrated tool loop. Prefer hybrid or `--no-llm` for CI and tests.
 
 ## Configuration
 
-All settings live in `config.yaml`. Run `code-review show-config` to inspect the resolved configuration.
+All settings live in `config.yaml`. Inspect with `code-review show-config`.
 
 ```yaml
-# Switch provider: ollama (default) or anthropic
-provider: ollama
-
-ollama:
-  model: gemma4:latest          # any Ollama model with function calling; alternatives: qwen3.5:4b, qwen3-coder-next
-  base_url: http://localhost:11434/v1
-  max_tokens: 8192
-  max_iterations: 25
-
-anthropic:
-  model: claude-opus-4-6
+llm:
+  model: ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  api_base: http://localhost:11434
+  timeout: 120
   max_tokens: 8192
   max_iterations: 20
-  # api_key: set via ANTHROPIC_API_KEY environment variable
+  temperature: 0
+  num_retries: 2
+  drop_params: true
+  fallbacks: []                  # e.g. [groq/llama-3.3-70b-versatile]
 
-github:
-  depth: 1                     # shallow clone
-  timeout: 120
-  # token: set via GITHUB_TOKEN for private repos
+aliases:
+  local: ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  test: ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  cheap: groq/llama-3.3-70b-versatile
+  frontier: anthropic/claude-sonnet-4-6
 ```
 
-Smell detection thresholds (long method line count, cyclomatic complexity, etc.) are fully configurable in `config.yaml` under `code_smells`, `architectural_smells`, and `structural_smells`.
+`--model local` / `--model test` / `--model cheap` / `--model frontier` resolve aliases. Hugging Face GGUF tags contain slashes (`hf.co/org/repo:Q4_K_M`) but are **not** LiteLLM prefixes — always write `ollama/hf.co/...`.
 
-### Environment Variables
+This GGUF is **completion-only** (no native tool calling). Use hybrid `review` or `--no-llm`. `--agentic` and `ask` need a tools-capable model.
 
-| Variable | Description |
+GitHub clones (`github.fetch_issues`, default on) pull the most recently opened issues (default 10, max 30) into the TD classifier. Set `GITHUB_TOKEN` for private repos and a higher API rate limit.
+
+Smell thresholds stay under `code_smells`, `architectural_smells`, and `structural_smells`.
+
+### Environment variables
+
+Copy [`.env.example`](.env.example). LiteLLM uses provider-native keys:
+
+| Variable | Used for |
 |---|---|
-| `ANTHROPIC_API_KEY` | Required when using the Anthropic backend |
-| `GITHUB_TOKEN` | Optional; used for cloning private repositories |
-| `CODE_REVIEW_CONFIG` | Optional path to an alternate `config.yaml` |
+| `OPENAI_API_KEY` | OpenAI and many OpenAI-compatible servers |
+| `ANTHROPIC_API_KEY` | Anthropic Claude |
+| `GROQ_API_KEY` | Groq |
+| `GEMINI_API_KEY` | Google Gemini |
+| `AZURE_API_KEY` / `AZURE_API_BASE` | Azure OpenAI |
+| `GITHUB_TOKEN` | Private clones and GitHub issues API |
+| `CODE_REVIEW_CONFIG` | Alternate `config.yaml` |
+| `QUALITY_TRIAGE_LIVE_LLM` | Enable live LLM tests (`1`) |
 
-## CLI Reference
+## CLI reference
 
 ```
-code-review [--config PATH] COMMAND [OPTIONS]
+code-review [--config PATH] [--ci] [-q|-v] COMMAND [OPTIONS]
 ```
-
-### Commands
 
 | Command | Description |
 |---|---|
-| `review TARGET` | Full AI review of a local path or GitHub URL |
-| `ask QUESTION` | Ask the agent a code quality question |
-| `analyze-file FILE` | Deep-dive review of a single Python file |
-| `run-tool ml-smells PATH` | Detect ML-specific anti-patterns |
-| `run-tool python-smells PATH` | Detect code/architectural/structural smells |
-| `run-tool classify-td --text TEXT` | Classify text into technical debt categories |
-| `run-tool code-intel PATH` | AST code intelligence (symbols, metrics, imports) |
-| `run-tool list-files PATH` | List all Python files in a directory |
+| `review TARGET` | Hybrid review of a local path or GitHub URL |
+| `ask QUESTION` | Agentic Q&A with tools |
+| `analyze-file FILE` | Pipeline scoped to one Python file |
+| `run-tool ml-smells PATH` | ML anti-patterns |
+| `run-tool python-smells PATH` | Code / architectural / structural smells |
+| `run-tool classify-td --text TEXT` | Technical debt categories |
+| `run-tool code-intel PATH` | AST intelligence |
+| `run-tool list-files PATH` | List Python files |
 | `run-tool read-file FILE` | Read a file with line numbers |
-| `interactive TARGET` | Interactive tool selector with AI synthesis |
+| `interactive TARGET` | Manual tool picker + optional synthesis |
 | `show-config` | Print resolved configuration |
-| `list-tools` | List all available analysis tools |
-| `ollama-models` | List models in local Ollama instance |
+| `list-tools` | List analysis tools |
+| `models` | Aliases plus local Ollama tags when reachable |
+| `app` | Optional Gradio companion (same pipeline) |
 
-### Common Options
+Common options: `--model`, `--api-base`, `--fallback`, `--format markdown|json|sarif|html|both`, `--fail-on`, `--no-llm`, `--agentic`, `--output`, `--keep-clone`.
 
-| Option | Description |
-|---|---|
-| `--provider ollama\|anthropic` | Override the LLM backend |
-| `--model NAME` | Override the model name |
-| `--output FILE` | Save the report to a file |
-| `--context TEXT` | Extra context or focus areas for the review |
-| `--keep-clone` | Keep the cloned GitHub repo after review |
-
-### Examples
-
-```bash
-# Review a specific GitHub branch with Anthropic
-code-review review https://github.com/owner/repo/tree/dev --provider anthropic
-
-# Detect ML smells only
-code-review run-tool ml-smells ./src
-
-# Detect structural Python smells
-code-review run-tool python-smells ./src --type structural
-
-# Classify technical debt from text
-code-review run-tool classify-td --text "TODO: fix memory leak" --text "HACK: bypass auth"
-
-# Code intelligence — show complexity hotspots
-code-review run-tool code-intel ./src
-
-# Look up where a symbol is defined
-code-review run-tool code-intel ./src --symbol MyClass
-
-# Show import dependency graph
-code-review run-tool code-intel ./src --imports
-
-# Interactive mode — choose tools, then get AI synthesis
-code-review interactive ./my_project
-
-# Use a custom config file
-code-review --config /path/to/config.yaml review ./my_project
-```
+Exit codes: `0` ok, `1` runtime error, `2` findings at or above `--fail-on`.
 
 ## Tools
 
-The agent has access to six analysis tools:
+The pipeline (and the agent, when `--agentic` / `ask`) can call:
 
-### `detect_ml_smells`
-Wraps `ml_code_smell_detector`. Detects:
-- **Framework-specific smells**: Pandas `iterrows`, NumPy chained indexing, Scikit-learn API misuse
-- **HuggingFace smells**: improper tokenizer usage, missing padding, model misuse
-- **General ML smells**: data leakage, missing random seeds, magic numbers in hyperparameters
+- **detect_ml_smells** — data leakage, missing seeds, Pandas/NumPy/sklearn/PyTorch/HF misuse
+- **detect_python_smells** — long methods, god objects, cycles, cyclomatic complexity, …
+- **classify_technical_debt** — 18 TD categories via ONNX (default) or optional torch
+- **analyze_code_intelligence** — symbols, metrics, import graph, find-usages (`file:line:col`)
+- **read_file** / **list_python_files**
 
-### `detect_python_smells`
-Wraps `code_quality_analyzer`. Three analysis modes:
-- **`code`**: long methods, large classes, duplicate code, feature envy, message chains, data clumps
-- **`architectural`**: cyclic dependencies, god objects, hub-like modules, unstable dependencies
-- **`structural`**: cyclomatic complexity, depth of inheritance tree, coupling between objects, lack of cohesion
+## Optional Gradio companion
 
-### `classify_technical_debt`
-Wraps `tdsuite` (transformer model `KarthikShivasankar/td-classifier`). Classifies text snippets into 18 technical debt categories. Useful for extracting meaning from TODO/FIXME/HACK comments.
+Install the UI extra, then launch the same pipeline in a browser. Pipeline-only is on by default (matches `--no-llm`).
 
-### `analyze_code_intelligence`
-Pure-Python AST analysis (no external dependency). Returns:
-- All class and function definitions with signatures and docstrings
-- Per-function metrics: cyclomatic complexity, LOC, nesting depth, parameter count
-- Symbol lookup by name with `file:line:col`
-- Find all usages of a symbol across the project
-- Import dependency graph
-
-### `read_file`
-Reads a Python file with line numbers, respecting the `read_file_max_lines` config limit.
-
-### `list_python_files`
-Lists all Python files in a directory with sizes, respecting the `ignore_dirs` config.
-
-## Project Structure
-
+```bash
+uv sync --extra ui
+code-review app
 ```
-quality-triage/
-├── src/code_review_agent/
-│   ├── __init__.py          # Package entry point
-│   ├── agent.py             # OllamaAgent, AnthropicAgent, CodeReviewAgent factory
-│   ├── cli.py               # Click CLI (review, ask, analyze-file, run-tool, interactive, …)
-│   ├── config.py            # YAML loader + typed dataclasses (AppConfig, OllamaConfig, …)
-│   ├── code_intel.py        # Pure-Python AST code intelligence
-│   ├── github_utils.py      # GitHub URL parsing and git clone helpers
-│   ├── prompts.py           # LLM system prompt
-│   ├── reporter.py          # Report generation utilities
-│   └── tools.py             # Tool implementations + OpenAI/Anthropic schemas
-├── tests/
-│   ├── test_config.py          # Config loading, defaults, singleton, thresholds
-│   ├── test_github_utils.py    # URL detection, parsing, clone cleanup
-│   ├── test_tools.py           # read_file, list_python_files, internal helpers
-│   ├── test_ollama_backend.py  # Comprehensive Ollama backend integration tests (79 tests)
-│   └── gradio_report.py        # Interactive Gradio test report dashboard
-├── config.yaml              # Application configuration
-├── pyproject.toml           # Project metadata and dependencies
-└── uv.lock                  # Locked dependency versions
-```
+
+`uv sync --group dev` already includes Gradio. The window is a companion, not a second product: prefer `code-review review` for CI and scripting. The default LFM2.5 GGUF is completion-only — do not use the Ask tab or `--agentic` on it.
 
 ## Development
 
 ```bash
-# Install with dev dependencies
-uv sync --dev
-
-# Format code
-ruff format src/
-
-# Lint
-ruff check src/
-
-# Run tests
-python -m pytest tests/ -v
-
-# Run tests with coverage
-python -m pytest tests/ --cov=src/code_review_agent --cov-report=term-missing
-```
-
-**Code style:**
-- 4-space indentation, max 88-character lines
-- Type hints required for all function signatures
-- Google-style docstrings for public functions
-- Import order: standard library → third-party → local
-
-## Testing
-
-The test suite lives in `tests/` and covers:
-
-| File | Tests | What it covers |
-|---|---|---|
-| `test_config.py` | 12 | Config loading from YAML, defaults, singleton (`get_config`/`reset_config`), threshold extraction |
-| `test_github_utils.py` | 11 | `is_github_url`, `parse_github_url` (HTTPS + SSH + tree URLs), `cleanup_repo` |
-| `test_tools.py` | 29 | Internal helpers (`_rel`, `_enrich_column`, `_python_files`), `read_file`, `list_python_files` |
-| `test_ollama_backend.py` | 79 | Full Ollama backend integration — see below |
-
-Tests that require the optional third-party detector packages (`ml_code_smell_detector`, `code_quality_analyzer`, `tdsuite`) are skipped gracefully when those packages are absent.
-
-### Ollama Backend Test Suite (`test_ollama_backend.py`)
-
-79 comprehensive tests covering all layers of the stack:
-
-| Test Class | Tests | What it validates |
-|---|---|---|
-| `TestOllamaConfig` | 7 | Default model, base URL, token limits, timeout from config |
-| `TestCodeReviewAgentFactory` | 3 | Provider routing (ollama / anthropic), config override |
-| `TestOllamaAgentLive` | 6 | Live connectivity, streaming, response type, `review()`, iteration limits |
-| `TestListPythonFilesTool` | 7 | File listing, ignore dirs, edge cases (missing dir, empty dir) |
-| `TestReadFileTool` | 7 | File reading, line numbers, truncation, error handling |
-| `TestCodeIntelligenceTool` | 7 | AST analysis, symbol lookup, import graph, find usages |
-| `TestDetectMlSmellsTool` | 5 | ML anti-pattern detection across all detector classes |
-| `TestDetectPythonSmellsTool` | 6 | Code / architectural / structural smell detection |
-| `TestClassifyTechDebtTool` | 5 | ONNX inference, multi-text batch, empty input, text truncation |
-| `TestExecuteTool` | 6 | Dispatcher happy path, unknown tool, bad args, JSON serialisation |
-| `TestToolSchemas` | 4 | All 6 tools defined, required fields, registry consistency |
-| `TestOllamaAgentToolCalling` | 5 | Full agentic loop: LLM calls tools → result flows back |
-| `TestOllamaConnectivity` | 3 | REST endpoint reachability, model list, OpenAI-compat `/v1/models` |
-| `TestInternalHelpers` | 8 | `_rel`, `_enrich_column`, `_python_files` edge cases |
-
-Run the full suite:
-
-```bash
-# All tests
+uv sync --group dev
+uv run ruff format src/ tests/
+uv run ruff check src/ tests/
 uv run pytest tests/ -v
-
-# Ollama backend only
-uv run pytest tests/test_ollama_backend.py -v -s
-
-# Filter to a specific class
-uv run pytest tests/test_ollama_backend.py -k "Config or Schema" -v
+uv run pytest tests/ --cov=src/code_review_agent --cov-report=term-missing
 ```
 
-Current results (all deps + live Ollama): **131 passed** in ~4 min (dominated by LLM inference).
-
-### Gradio Test Dashboard
-
-An interactive report UI that runs the test suite and visualises results:
+Live LLM tests stay skipped unless `QUALITY_TRIAGE_LIVE_LLM=1` (needs Ollama and the pulled GGUF). HF GGUF tool-calling tests skip unless `QUALITY_TRIAGE_FORCE_TOOLS=1`. GitHub clone E2E needs network and also exercises recent-open-issue fetch. Classify stored issue text with:
 
 ```bash
-uv run python tests/gradio_report.py
-# Open http://127.0.0.1:7860 in your browser
+uv run pytest tests/ -v -m e2e
+code-review run-tool classify-td --from-file tests/fixtures/pallets_issue_snippets.txt --format json
+QUALITY_TRIAGE_LIVE_LLM=1 uv run pytest tests/ -v -m integration
 ```
-
-Features:
-- Summary card: total / passed / failed / skipped / pass rate
-- Per-test table with badge, class, test name, duration, and error excerpts
-- Raw pytest log viewer
-- Downloadable timestamped JSON report (saved to `reports/`)
-- Ollama status panel (online/offline + available models)
-
-Coverage summary (unit-testable modules):
-
-| Module | Coverage |
-|---|---|
-| `config.py` | 93% |
-| `github_utils.py` | 59% |
-| `tools.py` | 68% |
-| `agent.py` | 72% |
-| `code_intel.py` | 61% |
-| `__init__.py` / `prompts.py` | 100% |
-
-## Report Structure
-
-Every AI-generated review follows this structure:
-
-1. **Executive Summary** — overall health score (0–100), top 3 priorities
-2. **Critical Issues** — must-fix items with code examples
-3. **ML-Specific Issues** — data leakage, reproducibility, framework misuse
-4. **Code Quality Issues** — smells by category with exact `file:line:col`
-5. **Architecture Issues** — module-level problems
-6. **Technical Debt** — classified TODO/FIXME snippets
-7. **Complexity Hotspots** — top functions by cyclomatic complexity
-8. **Improvement Roadmap** — prioritised recommendations with effort estimates
 
 ## License
 

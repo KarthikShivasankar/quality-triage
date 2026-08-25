@@ -1,10 +1,10 @@
 """
-Comprehensive integration & unit tests for the Ollama backend.
+Integration and unit tests for the Ollama-backed LiteLLM path.
 
 Coverage areas:
-  - OllamaAgent connectivity and basic Q&A
-  - OllamaAgent streaming output
-  - OllamaAgent tool-call dispatch (all 6 tools)
+  - LiteLLMAgent connectivity and basic Q&A (live)
+  - LiteLLMAgent streaming output (live)
+  - LiteLLMAgent tool-call dispatch (live; skipped on completion-only GGUF)
   - CodeReviewAgent factory (provider routing)
   - Config loading and Ollama defaults
   - Tool functions: list_python_files, read_file, analyze_code_intelligence
@@ -15,9 +15,7 @@ Coverage areas:
   - TOOL_DEFINITIONS_OPENAI schema correctness
 
 Run with:
-    uv run pytest tests/test_ollama_backend.py -v -s
-or directly:
-    uv run python tests/test_ollama_backend.py
+    uv run pytest tests/test_ollama_backend.py -v
 """
 
 from __future__ import annotations
@@ -26,8 +24,6 @@ import json
 import os
 import sys
 import time
-import traceback
-from pathlib import Path
 
 import pytest
 
@@ -39,7 +35,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 # ---------------------------------------------------------------------------
 
 OLLAMA_BASE_URL = "http://localhost:11434/v1"
-OLLAMA_API_URL  = "http://localhost:11434"
+OLLAMA_API_URL = "http://localhost:11434"
 
 
 def _check_ollama(base_url: str = OLLAMA_BASE_URL) -> tuple[bool, str, list[str]]:
@@ -51,17 +47,21 @@ def _check_ollama(base_url: str = OLLAMA_BASE_URL) -> tuple[bool, str, list[str]
         with urllib.request.urlopen(api_url, timeout=5) as resp:
             data = json.loads(resp.read())
         models = [m["name"] for m in data.get("models", [])]
-    except Exception as exc:
+    except Exception:
         return False, "", []
 
     from code_review_agent.config import load_config
+    from code_review_agent.llm import ollama_native_name
+
     cfg = load_config()
-    configured = cfg.ollama.model
-    # Accept exact match or prefix match (e.g. "gemma4" matches "gemma4:latest")
-    found = next(
-        (m for m in models if configured in m or m.split(":")[0] in configured),
-        models[0] if models else "",
-    )
+    configured = ollama_native_name(cfg.llm.model)
+    if configured in models:
+        found = configured
+    else:
+        found = next(
+            (m for m in models if configured in m or m.split(":")[0] in configured),
+            models[0] if models else "",
+        )
     return bool(models), found, models
 
 
@@ -75,29 +75,37 @@ def _ollama_skip_reason(base_url: str = OLLAMA_BASE_URL) -> str | None:
     return None
 
 
+def _model_supports_tools() -> bool:
+    if os.environ.get("QUALITY_TRIAGE_FORCE_TOOLS") == "1":
+        return True
+    _, active, _ = _check_ollama()
+    return "hf.co" not in (active or "")
+
+
 def _make_agent(max_tokens: int = 512, max_iterations: int = 3):
-    """Return an OllamaAgent wired to the configured (or first available) model."""
+    """Return a LiteLLMAgent wired to a reachable Ollama model."""
+    from code_review_agent.agent import make_agent
     from code_review_agent.config import load_config
-    from code_review_agent.agent import OllamaAgent
+    from code_review_agent.llm import as_litellm_ollama
+
     cfg = load_config()
-    _, active, _ = _check_ollama(cfg.ollama.base_url)
-    return OllamaAgent(
-        model=active or cfg.ollama.model,
-        base_url=cfg.ollama.base_url,
-        api_key=cfg.ollama.api_key,
-        max_tokens=max_tokens,
-        max_iterations=max_iterations,
-        timeout=cfg.ollama.timeout,
-    )
+    _, active, _ = _check_ollama()
+    model = as_litellm_ollama(active or cfg.llm.model)
+    agent = make_agent(cfg, model=model)
+    agent.max_iterations = max_iterations
+    agent.client.max_tokens = max_tokens
+    return agent
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(autouse=True)
 def reset_cfg():
     from code_review_agent.config import reset_config
+
     reset_config()
     yield
     reset_config()
@@ -137,83 +145,89 @@ def sample_py_dir(tmp_path):
 # 1. Config / OllamaConfig defaults
 # ===========================================================================
 
-class TestOllamaConfig:
+
+class TestLLMConfig:
     def test_default_provider_is_ollama(self):
         from code_review_agent.config import load_config
+
         cfg = load_config()
         assert cfg.provider == "ollama"
 
     def test_default_model_set(self):
-        from code_review_agent.config import load_config
+        from code_review_agent.config import DEFAULT_OLLAMA_NATIVE_MODEL, load_config
+
         cfg = load_config()
-        assert cfg.ollama.model  # non-empty string
+        assert cfg.llm.model
+        assert DEFAULT_OLLAMA_NATIVE_MODEL in cfg.llm.model
 
     def test_default_base_url(self):
         from code_review_agent.config import load_config
+
         cfg = load_config()
-        assert "localhost" in cfg.ollama.base_url or "11434" in cfg.ollama.base_url
+        assert cfg.llm.api_base
+        assert "11434" in cfg.llm.api_base or "localhost" in cfg.llm.api_base
 
     def test_max_tokens_positive(self):
         from code_review_agent.config import load_config
+
         cfg = load_config()
-        assert cfg.ollama.max_tokens > 0
+        assert cfg.llm.max_tokens > 0
 
     def test_max_iterations_positive(self):
         from code_review_agent.config import load_config
+
         cfg = load_config()
-        assert cfg.ollama.max_iterations > 0
+        assert cfg.llm.max_iterations > 0
 
     def test_timeout_positive(self):
         from code_review_agent.config import load_config
-        cfg = load_config()
-        assert cfg.ollama.timeout > 0
 
-    def test_api_key_present(self):
-        from code_review_agent.config import load_config
         cfg = load_config()
-        assert cfg.ollama.api_key  # defaults to "ollama"
+        assert cfg.llm.timeout > 0
+
+    def test_drop_params_default(self):
+        from code_review_agent.config import load_config
+
+        cfg = load_config()
+        assert cfg.llm.drop_params is True
 
 
 # ===========================================================================
 # 2. CodeReviewAgent factory routing
 # ===========================================================================
 
+
 class TestCodeReviewAgentFactory:
-    def test_factory_returns_ollama_agent(self):
-        skip = _ollama_skip_reason()
-        if skip:
-            pytest.skip(skip)
-        from code_review_agent.agent import CodeReviewAgent, OllamaAgent
+    def test_factory_returns_litellm_agent(self):
+        from code_review_agent.agent import CodeReviewAgent, LiteLLMAgent
+
         agent = CodeReviewAgent(provider="ollama")
-        assert isinstance(agent, OllamaAgent)
+        assert isinstance(agent, LiteLLMAgent)
 
     def test_factory_respects_provider_override(self):
-        """Requesting 'anthropic' should return AnthropicAgent (import only—no API call)."""
-        from code_review_agent.agent import CodeReviewAgent, AnthropicAgent
-        # AnthropicAgent.__init__ calls anthropic.Anthropic() which is cheap to init
-        try:
-            agent = CodeReviewAgent(provider="anthropic")
-            assert isinstance(agent, AnthropicAgent)
-        except Exception:
-            pytest.skip("anthropic package or key not available")
+        from code_review_agent.agent import CodeReviewAgent, LiteLLMAgent
+
+        agent = CodeReviewAgent(provider="anthropic")
+        assert isinstance(agent, LiteLLMAgent)
+        assert "anthropic" in agent.client.model
 
     def test_factory_default_uses_config_provider(self):
-        skip = _ollama_skip_reason()
-        if skip:
-            pytest.skip(skip)
-        from code_review_agent.agent import CodeReviewAgent, OllamaAgent
+        from code_review_agent.agent import CodeReviewAgent, LiteLLMAgent
         from code_review_agent.config import load_config
+
         cfg = load_config()
-        if cfg.provider == "ollama":
-            agent = CodeReviewAgent()
-            assert isinstance(agent, OllamaAgent)
+        agent = CodeReviewAgent()
+        assert isinstance(agent, LiteLLMAgent)
+        assert agent.client.model == cfg.llm.model
 
 
 # ===========================================================================
-# 3. OllamaAgent — live connectivity
+# 3. LiteLLMAgent — live Ollama connectivity
 # ===========================================================================
 
-class TestOllamaAgentLive:
+
+@pytest.mark.integration
+class TestLiteLLMAgentLive:
     """Tests that require a running Ollama daemon."""
 
     def setup_method(self):
@@ -225,7 +239,7 @@ class TestOllamaAgentLive:
         agent = _make_agent(max_tokens=256, max_iterations=1)
         chunks = list(agent.ask("Reply with just the word: HELLO"))
         response = "".join(chunks).strip()
-        assert response, "OllamaAgent returned empty response"
+        assert response, "LiteLLMAgent returned empty response"
 
     def test_agent_streaming_yields_multiple_chunks(self):
         agent = _make_agent(max_tokens=256, max_iterations=1)
@@ -249,7 +263,6 @@ class TestOllamaAgentLive:
 
     def test_agent_ask_returns_iterator(self):
         agent = _make_agent(max_tokens=128, max_iterations=1)
-        import types
         gen = agent.ask("Say TEST")
         assert hasattr(gen, "__iter__")
 
@@ -269,18 +282,23 @@ class TestOllamaAgentLive:
 # 4. Tool: list_python_files
 # ===========================================================================
 
+
 class TestListPythonFilesTool:
     def test_lists_files_in_sample_dir(self, sample_py_dir):
         from code_review_agent.tools import list_python_files
+
         result = list_python_files(str(sample_py_dir))
         assert "error" not in result
-        assert result["total_files"] >= 3  # main.py, utils.py, subpkg/__init__.py, subpkg/ml_model.py
+        assert (
+            result["total_files"] >= 3
+        )  # main.py, utils.py, subpkg/__init__.py, subpkg/ml_model.py
         paths = [f["path"] for f in result["files"]]
         assert any("main.py" in p for p in paths)
         assert any("utils.py" in p for p in paths)
 
     def test_returns_sizes(self, sample_py_dir):
         from code_review_agent.tools import list_python_files
+
         result = list_python_files(str(sample_py_dir))
         for f in result["files"]:
             assert "size_bytes" in f
@@ -288,6 +306,7 @@ class TestListPythonFilesTool:
 
     def test_respects_ignore_dirs(self, tmp_path):
         from code_review_agent.tools import list_python_files
+
         (tmp_path / "good.py").write_text("x = 1")
         bad = tmp_path / "venv"
         bad.mkdir()
@@ -299,11 +318,13 @@ class TestListPythonFilesTool:
 
     def test_missing_directory(self):
         from code_review_agent.tools import list_python_files
+
         result = list_python_files("/nonexistent/path/12345")
         assert "error" in result
 
     def test_file_instead_of_directory(self, tmp_path):
         from code_review_agent.tools import list_python_files
+
         f = tmp_path / "x.py"
         f.write_text("pass")
         result = list_python_files(str(f))
@@ -311,12 +332,14 @@ class TestListPythonFilesTool:
 
     def test_empty_directory(self, tmp_path):
         from code_review_agent.tools import list_python_files
+
         result = list_python_files(str(tmp_path))
         assert result["total_files"] == 0
         assert result["files"] == []
 
     def test_tool_key_present(self, sample_py_dir):
         from code_review_agent.tools import list_python_files
+
         result = list_python_files(str(sample_py_dir))
         assert result.get("tool") == "list_python_files"
 
@@ -325,9 +348,11 @@ class TestListPythonFilesTool:
 # 5. Tool: read_file
 # ===========================================================================
 
+
 class TestReadFileTool:
     def test_reads_existing_file(self, tmp_path):
         from code_review_agent.tools import read_file
+
         f = tmp_path / "sample.py"
         f.write_text("line one\nline two\nline three\n")
         result = read_file(str(f))
@@ -337,6 +362,7 @@ class TestReadFileTool:
 
     def test_line_numbers_present(self, tmp_path):
         from code_review_agent.tools import read_file
+
         f = tmp_path / "numbered.py"
         f.write_text("a = 1\nb = 2\n")
         result = read_file(str(f))
@@ -345,6 +371,7 @@ class TestReadFileTool:
 
     def test_truncation(self, tmp_path):
         from code_review_agent.tools import read_file
+
         f = tmp_path / "big.py"
         f.write_text("\n".join(f"line_{i}" for i in range(200)))
         result = read_file(str(f), max_lines=10)
@@ -353,6 +380,7 @@ class TestReadFileTool:
 
     def test_no_truncation_when_within_limit(self, tmp_path):
         from code_review_agent.tools import read_file
+
         f = tmp_path / "small.py"
         f.write_text("x = 1\n")
         result = read_file(str(f), max_lines=100)
@@ -360,16 +388,19 @@ class TestReadFileTool:
 
     def test_missing_file(self):
         from code_review_agent.tools import read_file
+
         result = read_file("/no/such/file.py")
         assert "error" in result
 
     def test_directory_instead_of_file(self, tmp_path):
         from code_review_agent.tools import read_file
+
         result = read_file(str(tmp_path))
         assert "error" in result
 
     def test_tool_key_present(self, tmp_path):
         from code_review_agent.tools import read_file
+
         f = tmp_path / "f.py"
         f.write_text("pass\n")
         result = read_file(str(f))
@@ -380,9 +411,11 @@ class TestReadFileTool:
 # 6. Tool: analyze_code_intelligence
 # ===========================================================================
 
+
 class TestCodeIntelligenceTool:
     def test_analyzes_single_file(self, tmp_path):
         from code_review_agent.tools import analyze_code_intelligence
+
         f = tmp_path / "example.py"
         f.write_text(
             "def add(a, b):\n"
@@ -398,12 +431,14 @@ class TestCodeIntelligenceTool:
 
     def test_analyzes_directory(self, sample_py_dir):
         from code_review_agent.tools import analyze_code_intelligence
+
         result = analyze_code_intelligence(str(sample_py_dir))
         assert "error" not in result
         assert "summary" in result
 
     def test_symbol_lookup(self, tmp_path):
         from code_review_agent.tools import analyze_code_intelligence
+
         f = tmp_path / "sym.py"
         f.write_text("def my_special_function():\n    pass\n")
         result = analyze_code_intelligence(str(f), symbol="my_special_function")
@@ -413,27 +448,29 @@ class TestCodeIntelligenceTool:
 
     def test_import_graph(self, sample_py_dir):
         from code_review_agent.tools import analyze_code_intelligence
+
         result = analyze_code_intelligence(str(sample_py_dir), import_graph=True)
         assert "import_graph" in result
 
     def test_find_usages(self, tmp_path):
         from code_review_agent.tools import analyze_code_intelligence
+
         f = tmp_path / "usage.py"
         f.write_text(
-            "def greet(name):\n"
-            "    return 'hello ' + name\n\n"
-            "result = greet('world')\n"
+            "def greet(name):\n    return 'hello ' + name\n\nresult = greet('world')\n"
         )
         result = analyze_code_intelligence(str(f), find_usages_of="greet")
         assert "usages" in result
 
     def test_missing_path(self):
         from code_review_agent.tools import analyze_code_intelligence
+
         result = analyze_code_intelligence("/nonexistent/12345")
         assert "error" in result
 
     def test_summary_contains_expected_keys(self, sample_py_dir):
         from code_review_agent.tools import analyze_code_intelligence
+
         result = analyze_code_intelligence(str(sample_py_dir))
         summary = result.get("summary", {})
         # Summary should have some content (exact keys depend on CodeIntelligence impl)
@@ -446,7 +483,7 @@ class TestCodeIntelligenceTool:
 
 _ml_available = pytest.mark.skipif(
     not __import__("importlib").util.find_spec("ml_code_smell_detector"),
-    reason="ml_code_smell_detector not installed"
+    reason="ml_code_smell_detector not installed",
 )
 
 
@@ -454,32 +491,40 @@ _ml_available = pytest.mark.skipif(
 class TestDetectMlSmellsTool:
     def test_returns_tool_key(self, sample_py_dir):
         from code_review_agent.tools import detect_ml_smells
+
         result = detect_ml_smells(str(sample_py_dir))
         assert result.get("tool") == "ml_smells"
 
     def test_analyzes_files(self, sample_py_dir):
         from code_review_agent.tools import detect_ml_smells
+
         result = detect_ml_smells(str(sample_py_dir))
         assert "summary" in result
         assert result["summary"]["files_analyzed"] >= 1
 
     def test_summary_keys(self, sample_py_dir):
         from code_review_agent.tools import detect_ml_smells
+
         result = detect_ml_smells(str(sample_py_dir))
         summary = result["summary"]
-        for key in ("files_analyzed", "total_smells",
-                    "files_with_framework_smells",
-                    "files_with_hf_smells",
-                    "files_with_general_ml_smells"):
+        for key in (
+            "files_analyzed",
+            "total_smells",
+            "files_with_framework_smells",
+            "files_with_hf_smells",
+            "files_with_general_ml_smells",
+        ):
             assert key in summary, f"Missing key: {key}"
 
     def test_missing_path(self):
         from code_review_agent.tools import detect_ml_smells
+
         result = detect_ml_smells("/no/such/path")
         assert "error" in result
 
     def test_no_python_files(self, tmp_path):
         from code_review_agent.tools import detect_ml_smells
+
         (tmp_path / "readme.txt").write_text("hello")
         result = detect_ml_smells(str(tmp_path))
         assert "error" in result
@@ -491,7 +536,7 @@ class TestDetectMlSmellsTool:
 
 _py_smells_available = pytest.mark.skipif(
     not __import__("importlib").util.find_spec("code_quality_analyzer"),
-    reason="code_quality_analyzer not installed"
+    reason="code_quality_analyzer not installed",
 )
 
 
@@ -499,31 +544,39 @@ _py_smells_available = pytest.mark.skipif(
 class TestDetectPythonSmellsTool:
     def test_returns_tool_key(self, sample_py_dir):
         from code_review_agent.tools import detect_python_smells
+
         result = detect_python_smells(str(sample_py_dir))
         assert result.get("tool") == "python_smells"
 
     def test_all_analysis_types(self, sample_py_dir):
         from code_review_agent.tools import detect_python_smells
+
         result = detect_python_smells(str(sample_py_dir), analysis_type="all")
-        assert "error" not in result or True  # may have partial errors; should not crash
+        assert (
+            "error" not in result or True
+        )  # may have partial errors; should not crash
 
     def test_code_smells_only(self, sample_py_dir):
         from code_review_agent.tools import detect_python_smells
+
         result = detect_python_smells(str(sample_py_dir), analysis_type="code")
         assert "code_smells" in result
 
     def test_structural_smells_only(self, sample_py_dir):
         from code_review_agent.tools import detect_python_smells
+
         result = detect_python_smells(str(sample_py_dir), analysis_type="structural")
         assert "structural_smells" in result
 
     def test_architectural_smells_only(self, sample_py_dir):
         from code_review_agent.tools import detect_python_smells
+
         result = detect_python_smells(str(sample_py_dir), analysis_type="architectural")
         assert "architectural_smells" in result
 
     def test_missing_path(self):
         from code_review_agent.tools import detect_python_smells
+
         result = detect_python_smells("/nonexistent/path")
         assert "error" in result
 
@@ -534,7 +587,7 @@ class TestDetectPythonSmellsTool:
 
 _tdsuite_available = pytest.mark.skipif(
     not __import__("importlib").util.find_spec("tdsuite"),
-    reason="tdsuite not installed"
+    reason="tdsuite not installed",
 )
 
 
@@ -542,6 +595,7 @@ _tdsuite_available = pytest.mark.skipif(
 class TestClassifyTechDebtTool:
     def test_onnx_backend_single_text(self):
         from code_review_agent.tools import classify_technical_debt
+
         result = classify_technical_debt(
             texts=["TODO: this authentication bypass is a critical security risk"],
             backend="onnx",
@@ -556,6 +610,7 @@ class TestClassifyTechDebtTool:
 
     def test_onnx_backend_multiple_texts(self):
         from code_review_agent.tools import classify_technical_debt
+
         texts = [
             "TODO: refactor this god object",
             "FIXME: this DB query is N+1 and kills performance",
@@ -568,11 +623,13 @@ class TestClassifyTechDebtTool:
 
     def test_empty_texts_returns_error(self):
         from code_review_agent.tools import classify_technical_debt
+
         result = classify_technical_debt(texts=[])
         assert "error" in result
 
     def test_result_contains_model_field(self):
         from code_review_agent.tools import classify_technical_debt
+
         result = classify_technical_debt(
             texts=["FIXME: memory leak here"],
             backend="onnx",
@@ -583,6 +640,7 @@ class TestClassifyTechDebtTool:
 
     def test_prediction_text_truncated_to_200(self):
         from code_review_agent.tools import classify_technical_debt
+
         long_text = "TODO: " + "x" * 500
         result = classify_technical_debt(texts=[long_text], backend="onnx")
         if "error" in result:
@@ -596,9 +654,11 @@ class TestClassifyTechDebtTool:
 # 10. execute_tool dispatcher
 # ===========================================================================
 
+
 class TestExecuteTool:
     def test_list_python_files_via_dispatcher(self, sample_py_dir):
         from code_review_agent.tools import execute_tool
+
         raw = execute_tool("list_python_files", {"directory": str(sample_py_dir)})
         result = json.loads(raw)
         assert result.get("tool") == "list_python_files"
@@ -606,6 +666,7 @@ class TestExecuteTool:
 
     def test_read_file_via_dispatcher(self, tmp_path):
         from code_review_agent.tools import execute_tool
+
         f = tmp_path / "x.py"
         f.write_text("a = 1\n")
         raw = execute_tool("read_file", {"file_path": str(f)})
@@ -615,6 +676,7 @@ class TestExecuteTool:
 
     def test_analyze_code_intelligence_via_dispatcher(self, tmp_path):
         from code_review_agent.tools import execute_tool
+
         f = tmp_path / "t.py"
         f.write_text("def foo(): pass\n")
         raw = execute_tool("analyze_code_intelligence", {"path": str(f)})
@@ -623,6 +685,7 @@ class TestExecuteTool:
 
     def test_unknown_tool_returns_error(self):
         from code_review_agent.tools import execute_tool
+
         raw = execute_tool("nonexistent_tool", {})
         result = json.loads(raw)
         assert "error" in result
@@ -630,6 +693,7 @@ class TestExecuteTool:
 
     def test_tool_with_bad_args_returns_error(self):
         from code_review_agent.tools import execute_tool
+
         # Missing required arg — should fail gracefully
         raw = execute_tool("read_file", {})
         result = json.loads(raw)
@@ -637,6 +701,7 @@ class TestExecuteTool:
 
     def test_result_is_valid_json(self, sample_py_dir):
         from code_review_agent.tools import execute_tool
+
         raw = execute_tool("list_python_files", {"directory": str(sample_py_dir)})
         # Should not raise
         parsed = json.loads(raw)
@@ -647,9 +712,11 @@ class TestExecuteTool:
 # 11. TOOL_DEFINITIONS_OPENAI schema validation
 # ===========================================================================
 
+
 class TestToolSchemas:
     def test_all_six_tools_defined(self):
         from code_review_agent.tools import TOOL_DEFINITIONS_OPENAI
+
         names = {t["function"]["name"] for t in TOOL_DEFINITIONS_OPENAI}
         expected = {
             "detect_ml_smells",
@@ -663,6 +730,7 @@ class TestToolSchemas:
 
     def test_each_tool_has_required_fields(self):
         from code_review_agent.tools import TOOL_DEFINITIONS_OPENAI
+
         for tool in TOOL_DEFINITIONS_OPENAI:
             assert tool["type"] == "function"
             fn = tool["function"]
@@ -675,6 +743,7 @@ class TestToolSchemas:
 
     def test_required_fields_exist_in_properties(self):
         from code_review_agent.tools import TOOL_DEFINITIONS_OPENAI
+
         for tool in TOOL_DEFINITIONS_OPENAI:
             fn = tool["function"]
             params = fn["parameters"]
@@ -685,21 +754,29 @@ class TestToolSchemas:
 
     def test_tool_registry_matches_schema_names(self):
         from code_review_agent.tools import TOOL_DEFINITIONS_OPENAI, TOOL_REGISTRY
+
         schema_names = {t["function"]["name"] for t in TOOL_DEFINITIONS_OPENAI}
         assert schema_names == set(TOOL_REGISTRY.keys())
 
 
 # ===========================================================================
-# 12. OllamaAgent tool-calling (live — full agentic loop)
+# 12. LiteLLMAgent tool-calling (live — full agentic loop)
 # ===========================================================================
 
-class TestOllamaAgentToolCalling:
+
+@pytest.mark.integration
+class TestLiteLLMAgentToolCalling:
     """Tests that exercise the LLM tool-call dispatch path."""
 
     def setup_method(self):
         skip = _ollama_skip_reason()
         if skip:
             pytest.skip(skip)
+        if not _model_supports_tools():
+            pytest.skip(
+                "configured Ollama tag is completion-only (HF GGUF); "
+                "set QUALITY_TRIAGE_FORCE_TOOLS=1 to try anyway"
+            )
 
     def test_agent_calls_list_python_files_tool(self, sample_py_dir):
         agent = _make_agent(max_tokens=1024, max_iterations=5)
@@ -709,7 +786,6 @@ class TestOllamaAgentToolCalling:
         )
         chunks = list(agent.ask(prompt))
         response = "".join(chunks)
-        # Should mention tool execution or file count
         assert response.strip()
 
     def test_agent_calls_read_file_tool(self, sample_py_dir):
@@ -748,7 +824,9 @@ class TestOllamaAgentToolCalling:
         sentinel = "SENTINEL_VALUE_XYZ_42"
         f.write_text(f"value = '{sentinel}'\n")
         agent = _make_agent(max_tokens=512, max_iterations=5)
-        prompt = f"Use the read_file tool to read: {f}. Then tell me what value is assigned."
+        prompt = (
+            f"Use the read_file tool to read: {f}. Then tell me what value is assigned."
+        )
         chunks = list(agent.ask(prompt))
         response = "".join(chunks)
         # The sentinel should appear in the file read result and be referenced
@@ -759,19 +837,27 @@ class TestOllamaAgentToolCalling:
 # 13. Ollama connectivity probe (standalone)
 # ===========================================================================
 
+
+@pytest.mark.integration
 class TestOllamaConnectivity:
     def test_ollama_endpoint_reachable(self):
         import urllib.request
+
         try:
-            with urllib.request.urlopen(OLLAMA_API_URL + "/api/tags", timeout=5) as resp:
+            with urllib.request.urlopen(
+                OLLAMA_API_URL + "/api/tags", timeout=5
+            ) as resp:
                 assert resp.status == 200
         except Exception:
             pytest.skip("Ollama not reachable — skipping connectivity test")
 
     def test_models_list_non_empty(self):
         import urllib.request
+
         try:
-            with urllib.request.urlopen(OLLAMA_API_URL + "/api/tags", timeout=5) as resp:
+            with urllib.request.urlopen(
+                OLLAMA_API_URL + "/api/tags", timeout=5
+            ) as resp:
                 data = json.loads(resp.read())
             models = data.get("models", [])
             assert len(models) > 0, "No models found in Ollama"
@@ -781,6 +867,7 @@ class TestOllamaConnectivity:
     def test_openai_compat_models_endpoint(self):
         """Ollama's /v1/models should return a valid response."""
         import urllib.request
+
         try:
             req = urllib.request.Request(
                 OLLAMA_BASE_URL + "/models",
@@ -793,24 +880,72 @@ class TestOllamaConnectivity:
             pytest.skip("Ollama not reachable or /v1/models unsupported")
 
 
+@pytest.mark.integration
+class TestHybridSynthesisLive:
+    """Hybrid pipeline + LiteLLM narrative against the configured Ollama GGUF."""
+
+    def setup_method(self):
+        skip = _ollama_skip_reason()
+        if skip:
+            pytest.skip(skip)
+
+    def test_complete_text_ping(self):
+        from code_review_agent.config import load_config
+        from code_review_agent.llm import LLMClient, as_litellm_ollama
+
+        cfg = load_config()
+        _, active, _ = _check_ollama()
+        client = LLMClient(cfg.llm, model=as_litellm_ollama(active or cfg.llm.model))
+        client.max_tokens = 32
+        result = client.complete_text(
+            [
+                {"role": "user", "content": "Reply with the single word pong"},
+            ]
+        )
+        assert result.content.strip()
+
+    def test_execute_hybrid_review_with_llm(self, sample_py_dir):
+        from code_review_agent.config import load_config
+        from code_review_agent.pipeline import execute_hybrid_review
+
+        cfg = load_config()
+        result = execute_hybrid_review(
+            str(sample_py_dir),
+            cfg,
+            no_llm=False,
+            parallel=False,
+        )
+        assert result.report.duration_s is not None
+        if result.synthesis_error:
+            pytest.skip(f"synthesis unavailable: {result.synthesis_error}")
+        assert result.report.narrative
+        assert result.report.health_score >= 0
+
+
 # ===========================================================================
-# 14. Internal helpers (_rel, _enrich_column, _python_files)
+# Internal helpers (_rel, _enrich_column, _python_files)
 # ===========================================================================
+
 
 class TestInternalHelpers:
     def test_rel_basic(self, tmp_path):
         from code_review_agent.tools import _rel
+
         child = str(tmp_path / "sub" / "f.py")
         assert _rel(child, str(tmp_path)) == os.path.join("sub", "f.py")
 
     def test_rel_fallback_on_valueerror(self, monkeypatch):
         from code_review_agent.tools import _rel
-        monkeypatch.setattr(os.path, "relpath", lambda p, s: (_ for _ in ()).throw(ValueError()))
+
+        monkeypatch.setattr(
+            os.path, "relpath", lambda p, s: (_ for _ in ()).throw(ValueError())
+        )
         result = _rel("/abs/path.py", "/other")
         assert result == "/abs/path.py"
 
     def test_enrich_column_finds_needle(self, tmp_path):
         from code_review_agent.tools import _enrich_column
+
         f = tmp_path / "s.py"
         f.write_text("x = 1\ndef foo(): pass\n")
         col = _enrich_column(str(f), 2, "def foo():")
@@ -818,18 +953,21 @@ class TestInternalHelpers:
 
     def test_enrich_column_missing_line(self, tmp_path):
         from code_review_agent.tools import _enrich_column
+
         f = tmp_path / "s.py"
         f.write_text("x = 1\n")
         assert _enrich_column(str(f), 999, "nothing") is None
 
     def test_enrich_column_needle_not_found(self, tmp_path):
         from code_review_agent.tools import _enrich_column
+
         f = tmp_path / "s.py"
         f.write_text("x = 1\n")
         assert _enrich_column(str(f), 1, "zzznope") is None
 
     def test_python_files_single_file(self, tmp_path):
         from code_review_agent.tools import _python_files
+
         f = tmp_path / "a.py"
         f.write_text("pass")
         result = _python_files(f, set())
@@ -837,11 +975,13 @@ class TestInternalHelpers:
 
     def test_python_files_directory(self, sample_py_dir):
         from code_review_agent.tools import _python_files
+
         result = _python_files(sample_py_dir, set())
         assert len(result) >= 3
 
     def test_python_files_ignores_dirs(self, tmp_path):
         from code_review_agent.tools import _python_files
+
         good = tmp_path / "ok.py"
         good.write_text("pass")
         bad_dir = tmp_path / "venv"
@@ -851,16 +991,3 @@ class TestInternalHelpers:
         paths = [str(p) for p in result]
         assert any("ok.py" in p for p in paths)
         assert not any("skip.py" in p for p in paths)
-
-
-# ===========================================================================
-# Standalone runner
-# ===========================================================================
-
-if __name__ == "__main__":
-    import subprocess, sys
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", __file__, "-v", "-s", "--tb=short"],
-        cwd=str(Path(__file__).parent.parent),
-    )
-    sys.exit(result.returncode)

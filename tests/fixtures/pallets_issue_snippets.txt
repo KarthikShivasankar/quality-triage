@@ -1,0 +1,10 @@
+Flask#6123 stream_with_context: abandoned generator leaves the app context current on the worker thread; later requests skip teardown_appcontext. Client disconnect mid-stream, GC finalizes the iterator on another thread, teardown never fires, SQLAlchemy connections leak.
+Flask#6120 Update tests for Werkzeug deprecated header parsing helpers. parse_cache_control_header and parse_set_header emit DeprecationWarning; tests should use RequestCacheControl.from_header and HeaderSet.from_header.
+Flask#6114 jsonify emits NaN and Infinity, which are not valid JSON. DefaultJSONProvider never sets allow_nan=False so empty-input averages become NaN in application/json responses that JSON.parse cannot read.
+Flask#6107 Confusing docstring in Flask.get_send_file_max_age and Flask.send_static_file: "Note this is a duplicate of the same method in the Flask class" even though both methods are the implementations in that class.
+Flask#6122 Document async view patterns in Flask and the migration path to Quart for native async support.
+Click#3154 Click 9.0: reduce overhead and actually fix hacks that we had to make to patch bugs. Add guidance to the upgrade guide. Remove deprecations made in 8.5.0.
+Click#3156 Remove deprecated code for 9.0.
+Click#3696 Increasing utilities quality and documentation. Docstrings need updating, typing needs checking, test coverage is incomplete. Point to TQDM, Rich, Prompt Toolkit for fuller versions.
+Click#3362 HelpFormatter.write_usage breaks options at a hyphen. textwrap.TextWrapper break_on_hyphens splits --max-retry-count across lines with no user-facing option to disable it.
+Click#3406 Migrate sentinel values in src/click/_utils.py to Python 3.15 PEP 661 sentinel, with typing_extensions.sentinel as a backport for older versions.

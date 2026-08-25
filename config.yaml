@@ -4,23 +4,28 @@
 # =============================================================================
 
 # ---------------------------------------------------------------------------
-# Provider (Ollama is default — no API key required)
+# LiteLLM (default: local Ollama — no API key required)
+# model is a LiteLLM string: provider/name
+# Hugging Face GGUFs via Ollama: ollama/hf.co/<org>/<repo>:<quant>
+# Custom OpenAI-compatible servers: openai/<name> + api_base
 # ---------------------------------------------------------------------------
-provider: ollama
-
-ollama:
-  model: gemma4:latest            # supports function calling; alternatives: qwen3.5:4b, qwen3-coder-next
-  base_url: http://localhost:11434/v1
-  api_key: ollama
-  max_tokens: 8192
-  max_iterations: 25
-  timeout: 120                   # per-request timeout in seconds
-
-anthropic:
-  model: claude-opus-4-6
+llm:
+  model: ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  api_base: http://localhost:11434
+  timeout: 120
   max_tokens: 8192
   max_iterations: 20
-  # api_key: set via ANTHROPIC_API_KEY environment variable
+  temperature: 0
+  num_retries: 2
+  drop_params: true              # local models often reject unknown OpenAI params
+  fallbacks: []                  # e.g. [groq/llama-3.3-70b-versatile]
+
+# Short names resolved by --model / config
+aliases:
+  local: ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  test: ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M
+  cheap: groq/llama-3.3-70b-versatile
+  frontier: anthropic/claude-sonnet-4-6
 
 # ---------------------------------------------------------------------------
 # GitHub integration
@@ -29,6 +34,8 @@ github:
   clone_dir: /tmp/code_review_repos
   depth: 1                       # shallow clone (faster)
   timeout: 120                   # clone timeout in seconds
+  fetch_issues: true             # recent open issues → TD classifier on clone
+  issue_limit: 10                # 1–30 most recently opened; uses whatever exists
   # token: set via GITHUB_TOKEN env var for private repos
 
 # ---------------------------------------------------------------------------
@@ -69,10 +76,11 @@ code_intel:
 # ---------------------------------------------------------------------------
 report:
   output_dir: ./reports
-  default_format: markdown        # markdown | json | both
+  default_format: markdown        # markdown | json | sarif | html | both
   include_code_snippets: true
   max_snippet_lines: 10
   min_severity: low               # critical | high | medium | low | info
+  fail_on: none                   # none | critical | high | medium | low | info
   open_after_write: false
 
 # ---------------------------------------------------------------------------

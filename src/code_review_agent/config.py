@@ -10,33 +10,71 @@ Searches for config.yaml in:
 
 from __future__ import annotations
 
-import os
+import dataclasses
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # Typed sub-configs
 # ---------------------------------------------------------------------------
 
+# Small Ollama test model: Hugging Face GGUF via `ollama pull hf.co/...`
+# ~1.7 GB, completion-only (no native tool calling). Hybrid review uses this.
+DEFAULT_OLLAMA_NATIVE_MODEL = "hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M"
+DEFAULT_LITELLM_MODEL = f"ollama/{DEFAULT_OLLAMA_NATIVE_MODEL}"
+
+LITELLM_PROVIDER_PREFIXES = (
+    "ollama_chat/",
+    "ollama/",
+    "openai/",
+    "anthropic/",
+    "groq/",
+    "gemini/",
+    "azure/",
+)
+
+
+def has_litellm_prefix(model: str) -> bool:
+    """True when `model` already starts with a known LiteLLM provider prefix."""
+    return model.startswith(LITELLM_PROVIDER_PREFIXES)
+
+
+def as_litellm_ollama(model: str) -> str:
+    """Ensure an Ollama tag is a LiteLLM ``ollama/<native>`` string.
+
+    Hugging Face GGUF tags like ``hf.co/org/repo:Q4_K_M`` contain slashes
+    but are *not* LiteLLM prefixes.
+    """
+    if has_litellm_prefix(model):
+        return model
+    return f"ollama/{model}"
+
+
+def ollama_native_name(model: str) -> str:
+    """Strip ``ollama/`` or ``ollama_chat/`` for native Ollama APIs."""
+    for prefix in ("ollama_chat/", "ollama/"):
+        if model.startswith(prefix):
+            return model[len(prefix) :]
+    return model
+
+
 @dataclass
-class OllamaConfig:
-    model: str = "gemma4:latest"
-    base_url: str = "http://localhost:11434/v1"
-    api_key: str = "ollama"
-    max_tokens: int = 8192
-    max_iterations: int = 25
+class LLMConfig:
+    """LiteLLM client settings. `model` is a LiteLLM model string (provider/name)."""
+
+    model: str = DEFAULT_LITELLM_MODEL
+    api_base: str | None = "http://localhost:11434"
+    api_key: str | None = None
     timeout: int = 120
-
-
-@dataclass
-class AnthropicConfig:
-    model: str = "claude-opus-4-6"
     max_tokens: int = 8192
     max_iterations: int = 20
+    temperature: float = 0.0
+    num_retries: int = 2
+    drop_params: bool = True
+    fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -44,6 +82,8 @@ class GithubConfig:
     clone_dir: str = "/tmp/code_review_repos"
     depth: int = 1
     timeout: int = 120
+    fetch_issues: bool = True
+    issue_limit: int = 10
 
 
 @dataclass
@@ -56,10 +96,22 @@ class TDClassifierConfig:
 
 @dataclass
 class ToolsConfig:
-    ignore_dirs: list[str] = field(default_factory=lambda: [
-        ".git", "__pycache__", "venv", ".venv", "node_modules",
-        "dist", "build", ".tox", ".eggs", "htmlcov",
-    ])
+    ignore_dirs: list[str] = field(
+        default_factory=lambda: [
+            ".git",
+            "__pycache__",
+            "venv",
+            ".venv",
+            "node_modules",
+            "dist",
+            "build",
+            ".tox",
+            ".eggs",
+            "htmlcov",
+            ".mypy_cache",
+            ".ruff_cache",
+        ]
+    )
     read_file_max_lines: int = 500
     td_classifier: TDClassifierConfig = field(default_factory=TDClassifierConfig)
 
@@ -75,18 +127,25 @@ class CodeIntelConfig:
 @dataclass
 class ReportConfig:
     output_dir: str = "./reports"
-    default_format: str = "markdown"
+    default_format: str = "markdown"  # markdown | json | sarif | both
     include_code_snippets: bool = True
     max_snippet_lines: int = 10
-    min_severity: str = "low"
+    min_severity: str = "low"  # critical | high | medium | low | info
+    fail_on: str = "none"  # none | critical | high | medium | low | info
     open_after_write: bool = False
 
 
 @dataclass
 class AppConfig:
-    provider: str = "ollama"
-    ollama: OllamaConfig = field(default_factory=OllamaConfig)
-    anthropic: AnthropicConfig = field(default_factory=AnthropicConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
+    aliases: dict[str, str] = field(
+        default_factory=lambda: {
+            "local": DEFAULT_LITELLM_MODEL,
+            "test": DEFAULT_LITELLM_MODEL,
+            "cheap": "groq/llama-3.3-70b-versatile",
+            "frontier": "anthropic/claude-sonnet-4-6",
+        }
+    )
     github: GithubConfig = field(default_factory=GithubConfig)
     tools: ToolsConfig = field(default_factory=ToolsConfig)
     code_intel: CodeIntelConfig = field(default_factory=CodeIntelConfig)
@@ -94,10 +153,19 @@ class AppConfig:
     _raw: dict = field(default_factory=dict, repr=False)
     _source: str = field(default="defaults", repr=False)
 
+    @property
+    def provider(self) -> str:
+        """Best-effort provider prefix from the LiteLLM model string."""
+        model = self.llm.model or ""
+        if "/" in model:
+            return model.split("/", 1)[0]
+        return "openai"
+
 
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
+
 
 def _merge(base: dict, override: dict) -> dict:
     """Deep-merge override into base (override wins)."""
@@ -118,7 +186,7 @@ def _find_config(explicit: str | None = None) -> tuple[dict, str]:
     candidates += [
         Path.cwd() / "config.yaml",
         Path.home() / ".config" / "code_review_agent" / "config.yaml",
-        Path(__file__).parent / "config.yaml",  # bundled defaults
+        Path(__file__).parent / "config.yaml",
     ]
     for p in candidates:
         if p.exists():
@@ -129,32 +197,79 @@ def _find_config(explicit: str | None = None) -> tuple[dict, str]:
 
 def _dc(cls, raw: dict):
     """Construct a dataclass from a dict, ignoring unknown keys."""
-    import dataclasses
     known = {f.name for f in dataclasses.fields(cls)}
     return cls(**{k: v for k, v in raw.items() if k in known})
+
+
+def _migrate_legacy_llm(raw: dict) -> dict:
+    """Map deprecated provider/ollama/anthropic blocks onto `llm` if needed."""
+    if "llm" in raw and isinstance(raw["llm"], dict) and raw["llm"].get("model"):
+        return raw.get("llm") or {}
+
+    llm: dict[str, Any] = dict(raw.get("llm") or {})
+    provider = str(raw.get("provider") or "ollama").lower()
+    ollama = raw.get("ollama") or {}
+    anthropic = raw.get("anthropic") or {}
+
+    if provider == "anthropic":
+        model = anthropic.get("model", "claude-sonnet-4-6")
+        llm.setdefault(
+            "model",
+            str(model) if has_litellm_prefix(str(model)) else f"anthropic/{model}",
+        )
+        for src_key, dst_key in (
+            ("max_tokens", "max_tokens"),
+            ("max_iterations", "max_iterations"),
+        ):
+            if src_key in anthropic:
+                llm.setdefault(dst_key, anthropic[src_key])
+    else:
+        model = ollama.get("model", DEFAULT_OLLAMA_NATIVE_MODEL)
+        llm.setdefault("model", as_litellm_ollama(str(model)))
+        if "base_url" in ollama:
+            base = str(ollama["base_url"]).rstrip("/")
+            if base.endswith("/v1"):
+                base = base[:-3]
+            llm.setdefault("api_base", base)
+        if "api_key" in ollama:
+            llm.setdefault("api_key", ollama["api_key"])
+        for src_key in ("max_tokens", "max_iterations", "timeout"):
+            if src_key in ollama:
+                llm.setdefault(src_key, ollama[src_key])
+    return llm
 
 
 def load_config(path: str | None = None) -> AppConfig:
     raw, source = _find_config(path)
 
-    def sub(key: str, cls, transform=None):
+    def sub(key: str, cls):
         d = raw.get(key, {})
-        if transform:
-            d = transform(d)
         return _dc(cls, d) if isinstance(d, dict) else cls()
 
-    tools_raw = raw.get("tools", {})
-    td_raw = tools_raw.get("td_classifier", {})
+    tools_raw = raw.get("tools", {}) if isinstance(raw.get("tools"), dict) else {}
+    td_raw = (
+        tools_raw.get("td_classifier", {})
+        if isinstance(tools_raw.get("td_classifier"), dict)
+        else {}
+    )
     tools_cfg = ToolsConfig(
         ignore_dirs=tools_raw.get("ignore_dirs", ToolsConfig().ignore_dirs),
         read_file_max_lines=tools_raw.get("read_file_max_lines", 500),
-        td_classifier=_dc(TDClassifierConfig, td_raw) if td_raw else TDClassifierConfig(),
+        td_classifier=_dc(TDClassifierConfig, td_raw)
+        if td_raw
+        else TDClassifierConfig(),
     )
 
+    aliases_raw = raw.get("aliases")
+    aliases = dict(AppConfig().aliases)
+    if isinstance(aliases_raw, dict):
+        aliases.update({str(k): str(v) for k, v in aliases_raw.items()})
+
+    llm_raw = _migrate_legacy_llm(raw)
+
     return AppConfig(
-        provider=raw.get("provider", "ollama"),
-        ollama=sub("ollama", OllamaConfig),
-        anthropic=sub("anthropic", AnthropicConfig),
+        llm=_dc(LLMConfig, llm_raw) if llm_raw else LLMConfig(),
+        aliases=aliases,
         github=sub("github", GithubConfig),
         tools=tools_cfg,
         code_intel=sub("code_intel", CodeIntelConfig),
@@ -166,11 +281,21 @@ def load_config(path: str | None = None) -> AppConfig:
 
 def get_thresholds(config: AppConfig, smell_type: str) -> dict[str, Any]:
     """
-    Return the thresholds dict for a detector type.
-    smell_type: "code_smells" | "architectural_smells" | "structural_smells"
-    Returns {THRESHOLD_NAME: {"value": N, "explanation": "..."}, ...}
+    Return detector thresholds for a smell type.
+
+    YAML stores `{NAME: {value: N, explanation: "..."}}`. Detectors expect
+    `{NAME: N}`, so nested `value` keys are flattened.
     """
-    return config._raw.get(smell_type, {})
+    raw = config._raw.get(smell_type, {})
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, val in raw.items():
+        if isinstance(val, dict) and "value" in val:
+            out[str(key)] = val["value"]
+        else:
+            out[str(key)] = val
+    return out
 
 
 # ---------------------------------------------------------------------------

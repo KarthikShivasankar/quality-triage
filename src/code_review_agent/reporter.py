@@ -14,22 +14,21 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 TD_LABEL_MAP: dict[int, str] = {
-    0:  "Architecture Debt",
-    1:  "Build Debt",
-    2:  "Code Debt",
-    3:  "Defect Debt",
-    4:  "Design Debt",
-    5:  "Documentation Debt",
-    6:  "Infrastructure Debt",
-    7:  "People Debt",
-    8:  "Process Debt",
-    9:  "Requirement Debt",
+    0: "Architecture Debt",
+    1: "Build Debt",
+    2: "Code Debt",
+    3: "Defect Debt",
+    4: "Design Debt",
+    5: "Documentation Debt",
+    6: "Infrastructure Debt",
+    7: "People Debt",
+    8: "Process Debt",
+    9: "Requirement Debt",
     10: "Service Debt",
     11: "Test Automation Debt",
     12: "Test Debt",
@@ -40,14 +39,45 @@ TD_LABEL_MAP: dict[int, str] = {
     17: "No Debt",
 }
 
+
+def td_class_label(pred: dict[str, Any]) -> str:
+    """Human label for a TD prediction (binary ONNX or 18-class)."""
+    idx = pred.get("predicted_class")
+    probs = pred.get("class_probabilities")
+    if isinstance(probs, list) and len(probs) == 2:
+        return "Technical Debt" if idx == 1 else "No Debt"
+    if idx is None:
+        return "Unknown"
+    try:
+        return TD_LABEL_MAP.get(int(idx), f"Class-{idx}")
+    except (TypeError, ValueError):
+        return str(idx)
+
+
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
+
+_HEALTH_WEIGHTS = {
+    "critical": 18,
+    "high": 8,
+    "medium": 3,
+    "low": 1,
+    "info": 0,
+}
+
+_SARIF_LEVEL = {
+    "critical": "error",
+    "high": "error",
+    "medium": "warning",
+    "low": "note",
+    "info": "note",
+}
 
 SEVERITY_EMOJI = {
     "critical": "🔴",
-    "high":     "🟠",
-    "medium":   "🟡",
-    "low":      "🟢",
-    "info":     "🔵",
+    "high": "🟠",
+    "medium": "🟡",
+    "low": "🟢",
+    "info": "🔵",
 }
 
 
@@ -55,12 +85,13 @@ SEVERITY_EMOJI = {
 # Data model
 # ---------------------------------------------------------------------------
 
+
 class Severity(str, Enum):
     CRITICAL = "critical"
-    HIGH     = "high"
-    MEDIUM   = "medium"
-    LOW      = "low"
-    INFO     = "info"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
 
 
 @dataclass
@@ -69,8 +100,8 @@ class Finding:
     tool: str
     category: str
     severity: Severity
-    file: str             # relative path
-    file_abs: str         # absolute path
+    file: str  # relative path
+    file_abs: str  # absolute path
     line: int
     col: int | None
     end_line: int | None = None
@@ -96,6 +127,11 @@ class ReportData:
     tools_run: list[str] = field(default_factory=list)
     duration_s: float | None = None
     config_source: str | None = None
+    narrative: str | None = None
+
+    @property
+    def health_score(self) -> int:
+        return compute_health_score(self.findings)
 
 
 # ---------------------------------------------------------------------------
@@ -103,19 +139,42 @@ class ReportData:
 # ---------------------------------------------------------------------------
 
 _SEVERITY_ML = {
-    "data_leakage":        Severity.CRITICAL,
+    "data_leakage": Severity.CRITICAL,
     "missing_random_seed": Severity.CRITICAL,
-    "reproducibility":     Severity.CRITICAL,
+    "reproducibility": Severity.CRITICAL,
 }
 
 _SEVERITY_STR = {
     "critical": Severity.CRITICAL,
-    "high":     Severity.HIGH,
-    "medium":   Severity.MEDIUM,
-    "low":      Severity.LOW,
-    "info":     Severity.INFO,
-    "":         Severity.MEDIUM,
+    "high": Severity.HIGH,
+    "medium": Severity.MEDIUM,
+    "low": Severity.LOW,
+    "info": Severity.INFO,
+    "": Severity.MEDIUM,
 }
+
+
+def compute_health_score(findings: list[Finding]) -> int:
+    """0–100 score: 100 is clean, deductions scale with severity."""
+    score = 100
+    for finding in findings:
+        score -= _HEALTH_WEIGHTS.get(finding.severity.value, 0)
+    return max(0, min(100, score))
+
+
+def count_by_severity(findings: list[Finding]) -> dict[str, int]:
+    counts = {s: 0 for s in SEVERITY_ORDER}
+    for finding in findings:
+        counts[finding.severity.value] = counts.get(finding.severity.value, 0) + 1
+    return counts
+
+
+def health_label(score: int) -> str:
+    if score >= 80:
+        return "healthy"
+    if score >= 50:
+        return "needs attention"
+    return "at risk"
 
 
 def _rel(abs_path: str, root: str) -> str:
@@ -158,7 +217,9 @@ class FindingNormalizer:
                                 self._norm_ml_smell(item, file_abs, prefix, findings)
         return findings
 
-    def _norm_ml_smell(self, smell: Any, file_abs: str, prefix: str, out: list[Finding]):
+    def _norm_ml_smell(
+        self, smell: Any, file_abs: str, prefix: str, out: list[Finding]
+    ):
         if not isinstance(smell, dict):
             return
         name = smell.get("name", "Unknown")
@@ -166,25 +227,27 @@ class FindingNormalizer:
         line = int(smell.get("line_number", 0) or 0)
         sev_key = name.lower().replace(" ", "_")
         sev = _SEVERITY_ML.get(sev_key, Severity.HIGH)
-        out.append(Finding(
-            finding_id=self._next_id(prefix),
-            tool="ml_smells",
-            category=name,
-            severity=sev,
-            file=_rel(fp, self.root),
-            file_abs=str(fp),
-            line=line,
-            col=None,
-            symbol=None,
-            message=smell.get("description", smell.get("name", "")),
-            how_to_fix=smell.get("how_to_fix"),
-            code_snippet=smell.get("code_snippet"),
-            framework=smell.get("framework"),
-            extra={
-                "benefits": smell.get("benefits", ""),
-                "strategies": smell.get("strategies", ""),
-            },
-        ))
+        out.append(
+            Finding(
+                finding_id=self._next_id(prefix),
+                tool="ml_smells",
+                category=name,
+                severity=sev,
+                file=_rel(fp, self.root),
+                file_abs=str(fp),
+                line=line,
+                col=None,
+                symbol=None,
+                message=smell.get("description", smell.get("name", "")),
+                how_to_fix=smell.get("how_to_fix"),
+                code_snippet=smell.get("code_snippet"),
+                framework=smell.get("framework"),
+                extra={
+                    "benefits": smell.get("benefits", ""),
+                    "strategies": smell.get("strategies", ""),
+                },
+            )
+        )
 
     # ---- Python smells ----------------------------------------------------
 
@@ -205,7 +268,9 @@ class FindingNormalizer:
                     continue
                 # try common container keys
                 for container_key in ("smells", "results", "items", key):
-                    if container_key in smells and isinstance(smells[container_key], list):
+                    if container_key in smells and isinstance(
+                        smells[container_key], list
+                    ):
                         items = smells[container_key]
                         break
 
@@ -226,20 +291,22 @@ class FindingNormalizer:
         line = int(smell.get("line_number", 0) or 0)
         sev_raw = str(smell.get("severity", "medium") or "medium").lower()
         sev = _SEVERITY_STR.get(sev_raw, Severity.MEDIUM)
-        out.append(Finding(
-            finding_id=self._next_id(prefix),
-            tool="python_smells",
-            category=name,
-            severity=sev,
-            file=_rel(fp, self.root) if fp else "",
-            file_abs=str(fp),
-            line=line,
-            col=None,
-            symbol=smell.get("module_class"),
-            message=smell.get("description", name),
-            how_to_fix=smell.get("how_to_fix"),
-            code_snippet=smell.get("code_snippet"),
-        ))
+        out.append(
+            Finding(
+                finding_id=self._next_id(prefix),
+                tool="python_smells",
+                category=name,
+                severity=sev,
+                file=_rel(fp, self.root) if fp else "",
+                file_abs=str(fp),
+                line=line,
+                col=None,
+                symbol=smell.get("module_class"),
+                message=smell.get("description", name),
+                how_to_fix=smell.get("how_to_fix"),
+                code_snippet=smell.get("code_snippet"),
+            )
+        )
 
     # ---- TD classifier ----------------------------------------------------
 
@@ -249,23 +316,26 @@ class FindingNormalizer:
             if not isinstance(pred, dict):
                 continue
             cls_idx = pred.get("predicted_class")
-            label = TD_LABEL_MAP.get(cls_idx, f"Class-{cls_idx}") if cls_idx is not None else "Unknown"
+            label = td_class_label(pred)
             prob = pred.get("predicted_probability", 0.0)
             if label == "No Debt":
                 continue
-            out.append({
-                "text": pred.get("text", ""),
-                "category": label,
-                "confidence": round(float(prob), 3),
-                "class_index": cls_idx,
-                "error": pred.get("error"),
-            })
+            out.append(
+                {
+                    "text": pred.get("text", ""),
+                    "category": label,
+                    "confidence": round(float(prob), 3),
+                    "class_index": cls_idx,
+                    "error": pred.get("error"),
+                }
+            )
         return out
 
 
 # ---------------------------------------------------------------------------
 # Renderer
 # ---------------------------------------------------------------------------
+
 
 class ReportRenderer:
     def __init__(self, include_code_snippets: bool = True, max_snippet_lines: int = 10):
@@ -279,12 +349,15 @@ class ReportRenderer:
         w = lines.append
 
         target_display = data.target
+        score = data.health_score
+        label = health_label(score)
         w(f"# Code Review Report: `{target_display}`")
         w("")
+        w(f"**Health score:** {score}/100 ({label})  ")
         w(f"**Analyzed:** {data.analyzed_at}  ")
         w(f"**Provider:** {data.provider} — `{data.model}`  ")
         w(f"**Files analyzed:** {data.files_analyzed}  ")
-        w(f"**Tools run:** {', '.join(data.tools_run)}  ")
+        w(f"**Tools run:** {', '.join(data.tools_run) or '—'}  ")
         if data.duration_s is not None:
             w(f"**Duration:** {data.duration_s:.1f}s  ")
         if data.config_source:
@@ -293,10 +366,15 @@ class ReportRenderer:
         w("---")
         w("")
 
-        # --- Severity breakdown ---
-        by_sev = {s: 0 for s in SEVERITY_ORDER}
-        for f in data.findings:
-            by_sev[f.severity.value] = by_sev.get(f.severity.value, 0) + 1
+        if data.narrative:
+            w("## AI Synthesis")
+            w("")
+            w(data.narrative.strip())
+            w("")
+            w("---")
+            w("")
+
+        by_sev = count_by_severity(data.findings)
 
         w("## Summary")
         w("")
@@ -307,6 +385,12 @@ class ReportRenderer:
             w(f"| {emoji} **{sev.upper()}** | {by_sev[sev]} |")
         w(f"| **TOTAL** | **{len(data.findings)}** |")
         w("")
+
+        if not data.findings:
+            w("No findings at or above the configured severity. Detectors still ran ")
+            w("on the listed tools; residual risk is undocumented behaviour and ")
+            w("unscanned non-Python files.")
+            w("")
 
         # TD summary
         if data.td_predictions:
@@ -337,23 +421,26 @@ class ReportRenderer:
                 self._render_finding(finding, lines)
 
         # --- Findings by file ---
-        w("## Findings by File")
-        w("")
-        by_file: dict[str, list[Finding]] = {}
-        for f in sorted(data.findings, key=lambda x: (x.file, x.line)):
-            by_file.setdefault(f.file, []).append(f)
+        if data.findings:
+            w("## Findings by File")
+            w("")
+            by_file: dict[str, list[Finding]] = {}
+            for f in sorted(data.findings, key=lambda x: (x.file, x.line)):
+                by_file.setdefault(f.file, []).append(f)
 
-        for file_path, file_findings in sorted(by_file.items()):
-            w(f"### `{file_path}` ({len(file_findings)} findings)")
-            w("")
-            w("| ID | Sev | Line:Col | Category | Symbol | Message |")
-            w("|----|-----|----------|----------|--------|---------|")
-            for f in sorted(file_findings, key=lambda x: x.line):
-                loc_str = f"{f.line}" + (f":{f.col}" if f.col else "")
-                sym = f"`{f.symbol}`" if f.symbol else "—"
-                msg = f.message[:80] + "…" if len(f.message) > 80 else f.message
-                w(f"| {f.finding_id} | {SEVERITY_EMOJI[f.severity.value]} | {loc_str} | {f.category} | {sym} | {msg} |")
-            w("")
+            for file_path, file_findings in sorted(by_file.items()):
+                w(f"### `{file_path}` ({len(file_findings)} findings)")
+                w("")
+                w("| ID | Sev | Line:Col | Category | Symbol | Message |")
+                w("|----|-----|----------|----------|--------|---------|")
+                for f in sorted(file_findings, key=lambda x: x.line):
+                    loc_str = f"{f.line}" + (f":{f.col}" if f.col else "")
+                    sym = f"`{f.symbol}`" if f.symbol else "—"
+                    msg = f.message[:80] + "…" if len(f.message) > 80 else f.message
+                    w(
+                        f"| {f.finding_id} | {SEVERITY_EMOJI[f.severity.value]} | {loc_str} | {f.category} | {sym} | {msg} |"
+                    )
+                w("")
 
         # --- Technical Debt snippets ---
         if data.td_predictions:
@@ -366,7 +453,9 @@ class ReportRenderer:
                 w("| Snippet | Category | Confidence |")
                 w("|---------|----------|------------|")
                 for p in sorted(high_conf, key=lambda x: -x["confidence"]):
-                    text_short = p["text"][:80].replace("|", "\\|") + ("…" if len(p["text"]) > 80 else "")
+                    text_short = p["text"][:80].replace("|", "\\|") + (
+                        "…" if len(p["text"]) > 80 else ""
+                    )
                     w(f"| {text_short} | {p['category']} | {p['confidence']:.0%} |")
                 w("")
 
@@ -376,11 +465,15 @@ class ReportRenderer:
             w("")
             s = data.intel_summary
             w(f"**Files:** {s.get('files_analyzed', '?')}  ")
-            w(f"**Symbols:** {s.get('total_symbols', '?')} "
-              f"({s.get('total_functions', '?')} functions, "
-              f"{s.get('total_classes', '?')} classes)  ")
+            w(
+                f"**Symbols:** {s.get('total_symbols', '?')} "
+                f"({s.get('total_functions', '?')} functions, "
+                f"{s.get('total_classes', '?')} classes)  "
+            )
             if s.get("parse_errors"):
-                w(f"**Parse errors:** {len(s['parse_errors'])} files could not be parsed  ")
+                w(
+                    f"**Parse errors:** {len(s['parse_errors'])} files could not be parsed  "
+                )
             w("")
 
             hotspots = s.get("complexity_hotspots", [])
@@ -392,11 +485,17 @@ class ReportRenderer:
                 for h in hotspots:
                     parent = f"{h['parent_class']}." if h.get("parent_class") else ""
                     loc_str = f"{h['file']}:{h['line']}:{h['col']}"
-                    w(f"| `{parent}{h['name']}` | `{loc_str}` | {h['line']} | **{h['cyclomatic_complexity']}** | {h['loc']} | {h['param_count']} | {h['nesting_depth']} |")
+                    w(
+                        f"| `{parent}{h['name']}` | `{loc_str}` | {h['line']} | **{h['cyclomatic_complexity']}** | {h['loc']} | {h['param_count']} | {h['nesting_depth']} |"
+                    )
                 w("")
 
         w("---")
-        w(f"*Generated by code-review-agent v0.2.0*")
+        try:
+            from code_review_agent import __version__
+        except Exception:
+            __version__ = "0.2.0"
+        w(f"*Generated by code-review-agent v{__version__}*")
         return "\n".join(lines)
 
     def _render_finding(self, f: Finding, lines: list[str]):
@@ -407,13 +506,15 @@ class ReportRenderer:
         lines.append(f"**Location:** `{loc}`  ")
         if f.framework:
             lines.append(f"**Framework:** {f.framework}  ")
-        lines.append(f"**Severity:** {SEVERITY_EMOJI[f.severity.value]} {f.severity.value.upper()}  ")
+        lines.append(
+            f"**Severity:** {SEVERITY_EMOJI[f.severity.value]} {f.severity.value.upper()}  "
+        )
         lines.append("")
         if f.message:
             lines.append(f"{f.message}")
             lines.append("")
         if self.include_code_snippets and f.code_snippet:
-            snippet = "\n".join(f.code_snippet.splitlines()[:self.max_snippet_lines])
+            snippet = "\n".join(f.code_snippet.splitlines()[: self.max_snippet_lines])
             lines.append("```python")
             lines.append(snippet)
             lines.append("```")
@@ -446,18 +547,88 @@ class ReportRenderer:
                 "files_analyzed": data.files_analyzed,
                 "tools_run": data.tools_run,
                 "duration_s": data.duration_s,
+                "health_score": data.health_score,
+                "severity_counts": count_by_severity(data.findings),
                 "findings": [f.__dict__ for f in data.findings],
                 "td_predictions": data.td_predictions,
                 "intel_summary": data.intel_summary,
+                "narrative": data.narrative,
             },
             default=_enc,
             indent=2,
         )
 
+    def render_html(self, data: ReportData) -> str:
+        from code_review_agent.dashboard import render_html_report
+
+        return render_html_report(data, include_snippets=self.include_code_snippets)
+
+    def render_sarif(self, data: ReportData) -> str:
+        """SARIF 2.1.0 document for GitHub Code Scanning / other CI consumers."""
+        rules: dict[str, dict[str, Any]] = {}
+        results: list[dict[str, Any]] = []
+        for finding in data.findings:
+            rule_id = f"{finding.tool}/{finding.category}".replace(" ", "_")
+            if rule_id not in rules:
+                rules[rule_id] = {
+                    "id": rule_id,
+                    "name": finding.category,
+                    "shortDescription": {"text": finding.category},
+                    "fullDescription": {"text": finding.message or finding.category},
+                    "defaultConfiguration": {
+                        "level": _SARIF_LEVEL.get(finding.severity.value, "warning"),
+                    },
+                }
+            region: dict[str, Any] = {"startLine": max(int(finding.line or 0), 1)}
+            if finding.col:
+                region["startColumn"] = int(finding.col)
+            if finding.end_line:
+                region["endLine"] = int(finding.end_line)
+            results.append(
+                {
+                    "ruleId": rule_id,
+                    "level": _SARIF_LEVEL.get(finding.severity.value, "warning"),
+                    "message": {"text": finding.message or finding.category},
+                    "locations": [
+                        {
+                            "physicalLocation": {
+                                "artifactLocation": {
+                                    "uri": finding.file.replace("\\", "/")
+                                },
+                                "region": region,
+                            }
+                        }
+                    ],
+                }
+            )
+        try:
+            from code_review_agent import __version__
+        except Exception:
+            __version__ = "0.2.0"
+        doc = {
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {
+                        "driver": {
+                            "name": "quality-triage",
+                            "version": __version__,
+                            "informationUri": "https://github.com/KarthikShivasankar/quality-triage",
+                            "rules": list(rules.values()),
+                        }
+                    },
+                    "results": results,
+                }
+            ],
+        }
+        return json.dumps(doc, indent=2)
+
 
 # ---------------------------------------------------------------------------
 # Report builder
 # ---------------------------------------------------------------------------
+
 
 def build_report(
     target: str,
@@ -487,7 +658,9 @@ def build_report(
 
     # Sort: severity first, then file+line
     sev_order = {s: i for i, s in enumerate(SEVERITY_ORDER)}
-    all_findings.sort(key=lambda f: (sev_order.get(f.severity.value, 99), f.file, f.line))
+    all_findings.sort(
+        key=lambda f: (sev_order.get(f.severity.value, 99), f.file, f.line)
+    )
 
     return ReportData(
         target=target,
@@ -501,19 +674,43 @@ def build_report(
         tools_run=tools_run or [],
         duration_s=duration_s,
         config_source=config_source,
+        narrative=None,
     )
+
+
+def filter_by_min_severity(findings: list[Finding], min_severity: str) -> list[Finding]:
+    """Keep findings at or above min_severity."""
+    if min_severity not in SEVERITY_ORDER:
+        return findings
+    cutoff = SEVERITY_ORDER.index(min_severity)
+    return [f for f in findings if SEVERITY_ORDER.index(f.severity.value) <= cutoff]
+
+
+def findings_meet_threshold(findings: list[Finding], fail_on: str | None) -> bool:
+    """True when any finding is at or above the fail-on severity."""
+    if not fail_on or fail_on == "none":
+        return False
+    if fail_on not in SEVERITY_ORDER:
+        return False
+    cutoff = SEVERITY_ORDER.index(fail_on)
+    return any(SEVERITY_ORDER.index(f.severity.value) <= cutoff for f in findings)
 
 
 def save_report(
     data: ReportData,
     output_dir: str = "./reports",
     fmt: str = "markdown",
+    include_code_snippets: bool = True,
+    max_snippet_lines: int = 10,
 ) -> list[str]:
     """
     Save report to output_dir. Returns list of written file paths.
-    fmt: "markdown" | "json" | "both"
+    fmt: "markdown" | "json" | "sarif" | "html" | "both"
     """
-    renderer = ReportRenderer()
+    renderer = ReportRenderer(
+        include_code_snippets=include_code_snippets,
+        max_snippet_lines=max_snippet_lines,
+    )
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     target_slug = Path(data.target).name.replace(" ", "_")[:30]
@@ -529,4 +726,12 @@ def save_report(
         json_path = str(base) + ".json"
         Path(json_path).write_text(renderer.render_json(data), encoding="utf-8")
         written.append(json_path)
+    if fmt == "sarif":
+        sarif_path = str(base) + ".sarif"
+        Path(sarif_path).write_text(renderer.render_sarif(data), encoding="utf-8")
+        written.append(sarif_path)
+    if fmt == "html":
+        html_path = str(base) + ".html"
+        Path(html_path).write_text(renderer.render_html(data), encoding="utf-8")
+        written.append(html_path)
     return written

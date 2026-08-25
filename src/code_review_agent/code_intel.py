@@ -8,21 +8,20 @@ from __future__ import annotations
 
 import ast
 import os
-import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class Location:
-    file: str           # absolute path
-    line: int           # 1-based
-    col: int            # 1-based
+    file: str  # absolute path
+    line: int  # 1-based
+    col: int  # 1-based
     end_line: int | None = None
     end_col: int | None = None
 
@@ -34,20 +33,20 @@ class Location:
 @dataclass
 class SymbolDef:
     name: str
-    kind: str           # "function" | "async_function" | "class" | "method" | "async_method"
+    kind: str  # "function" | "async_function" | "class" | "method" | "async_method"
     location: Location
     docstring: str | None = None
-    signature: str | None = None   # "(self, x: int) -> str"
-    parent: str | None = None      # class name if this is a method
+    signature: str | None = None  # "(self, x: int) -> str"
+    parent: str | None = None  # class name if this is a method
     is_private: bool = False
 
 
 @dataclass
 class ImportEdge:
-    from_file: str      # absolute path
-    module: str         # e.g. "os.path", "pandas"
-    names: list[str]    # empty = "import module"; non-empty = "from X import Y, Z"
-    alias: str | None   # "import X as Y"
+    from_file: str  # absolute path
+    module: str  # e.g. "os.path", "pandas"
+    names: list[str]  # empty = "import module"; non-empty = "from X import Y, Z"
+    alias: str | None  # "import X as Y"
     line: int
 
 
@@ -55,15 +54,15 @@ class ImportEdge:
 class Usage:
     symbol_name: str
     location: Location
-    context_line: str   # the source line for quick inspection
+    context_line: str  # the source line for quick inspection
 
 
 @dataclass
 class FunctionMetrics:
     name: str
     location: Location
-    loc: int                     # non-blank, non-comment lines
-    cyclomatic_complexity: int   # McCabe
+    loc: int  # non-blank, non-comment lines
+    cyclomatic_complexity: int  # McCabe
     param_count: int
     nesting_depth: int
     return_count: int
@@ -72,7 +71,7 @@ class FunctionMetrics:
 
 @dataclass
 class FileIntelligence:
-    file: str           # absolute path
+    file: str  # absolute path
     symbols: list[SymbolDef] = field(default_factory=list)
     imports: list[ImportEdge] = field(default_factory=list)
     metrics: list[FunctionMetrics] = field(default_factory=list)
@@ -83,14 +82,17 @@ class FileIntelligence:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _col(node: ast.AST) -> int:
-    return getattr(node, "col_offset", 0) + 1   # 1-based
+    return getattr(node, "col_offset", 0) + 1  # 1-based
 
 
 def _end(node: ast.AST) -> tuple[int | None, int | None]:
     return (
         getattr(node, "end_lineno", None),
-        (getattr(node, "end_col_offset", None) or 0) + 1 if getattr(node, "end_col_offset", None) is not None else None,
+        (getattr(node, "end_col_offset", None) or 0) + 1
+        if getattr(node, "end_col_offset", None) is not None
+        else None,
     )
 
 
@@ -129,8 +131,18 @@ def _cyclomatic(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
     """McCabe cyclomatic complexity for a function node."""
     count = 1
     for child in ast.walk(node):
-        if isinstance(child, (ast.If, ast.While, ast.For, ast.ExceptHandler,
-                               ast.With, ast.Assert, ast.comprehension)):
+        if isinstance(
+            child,
+            (
+                ast.If,
+                ast.While,
+                ast.For,
+                ast.ExceptHandler,
+                ast.With,
+                ast.Assert,
+                ast.comprehension,
+            ),
+        ):
             count += 1
         elif isinstance(child, ast.BoolOp) and isinstance(child.op, (ast.And, ast.Or)):
             count += len(child.values) - 1
@@ -143,8 +155,19 @@ def _nesting_depth(node: ast.AST) -> int:
     stack = [(node, 0)]
     while stack:
         n, d = stack.pop()
-        if isinstance(n, (ast.If, ast.For, ast.While, ast.With, ast.Try,
-                          ast.ExceptHandler, ast.AsyncFor, ast.AsyncWith)):
+        if isinstance(
+            n,
+            (
+                ast.If,
+                ast.For,
+                ast.While,
+                ast.With,
+                ast.Try,
+                ast.ExceptHandler,
+                ast.AsyncFor,
+                ast.AsyncWith,
+            ),
+        ):
             depth = max(depth, d + 1)
             d = d + 1
         for child in ast.iter_child_nodes(n):
@@ -181,6 +204,7 @@ def _param_count(node: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
 # File analyser visitor
 # ---------------------------------------------------------------------------
 
+
 class _FileVisitor(ast.NodeVisitor):
     def __init__(self, file_path: str, source: str, include_private: bool):
         self.file_path = file_path
@@ -195,49 +219,72 @@ class _FileVisitor(ast.NodeVisitor):
         if not self.include_private and node.name.startswith("_"):
             return
         end_l, end_c = _end(node)
-        self.symbols.append(SymbolDef(
-            name=node.name,
-            kind="class",
-            location=Location(self.file_path, node.lineno, _col(node), end_l, end_c),
-            docstring=ast.get_docstring(node),
-            parent=self._class_stack[-1] if self._class_stack else None,
-            is_private=node.name.startswith("_"),
-        ))
+        self.symbols.append(
+            SymbolDef(
+                name=node.name,
+                kind="class",
+                location=Location(
+                    self.file_path, node.lineno, _col(node), end_l, end_c
+                ),
+                docstring=ast.get_docstring(node),
+                parent=self._class_stack[-1] if self._class_stack else None,
+                is_private=node.name.startswith("_"),
+            )
+        )
         self._class_stack.append(node.name)
         self.generic_visit(node)
         self._class_stack.pop()
 
     def _visit_func(self, node: ast.FunctionDef | ast.AsyncFunctionDef):
-        is_private = node.name.startswith("_") and node.name not in ("__init__", "__call__")
+        is_private = node.name.startswith("_") and node.name not in (
+            "__init__",
+            "__call__",
+        )
         if is_private and not self.include_private:
             return
 
         parent = self._class_stack[-1] if self._class_stack else None
-        kind = ("async_method" if isinstance(node, ast.AsyncFunctionDef) else "method") \
-               if parent else \
-               ("async_function" if isinstance(node, ast.AsyncFunctionDef) else "function")
+        kind = (
+            ("async_method" if isinstance(node, ast.AsyncFunctionDef) else "method")
+            if parent
+            else (
+                "async_function"
+                if isinstance(node, ast.AsyncFunctionDef)
+                else "function"
+            )
+        )
 
         end_l, end_c = _end(node)
-        self.symbols.append(SymbolDef(
-            name=node.name,
-            kind=kind,
-            location=Location(self.file_path, node.lineno, _col(node), end_l, end_c),
-            docstring=ast.get_docstring(node),
-            signature=_sig(node),
-            parent=parent,
-            is_private=is_private,
-        ))
+        self.symbols.append(
+            SymbolDef(
+                name=node.name,
+                kind=kind,
+                location=Location(
+                    self.file_path, node.lineno, _col(node), end_l, end_c
+                ),
+                docstring=ast.get_docstring(node),
+                signature=_sig(node),
+                parent=parent,
+                is_private=is_private,
+            )
+        )
 
-        self.metrics.append(FunctionMetrics(
-            name=node.name,
-            location=Location(self.file_path, node.lineno, _col(node), end_l, end_c),
-            loc=_loc(node, self.source_lines),
-            cyclomatic_complexity=_cyclomatic(node),
-            param_count=_param_count(node),
-            nesting_depth=_nesting_depth(node),
-            return_count=sum(1 for n in ast.walk(node) if isinstance(n, ast.Return)),
-            parent_class=parent,
-        ))
+        self.metrics.append(
+            FunctionMetrics(
+                name=node.name,
+                location=Location(
+                    self.file_path, node.lineno, _col(node), end_l, end_c
+                ),
+                loc=_loc(node, self.source_lines),
+                cyclomatic_complexity=_cyclomatic(node),
+                param_count=_param_count(node),
+                nesting_depth=_nesting_depth(node),
+                return_count=sum(
+                    1 for n in ast.walk(node) if isinstance(n, ast.Return)
+                ),
+                parent_class=parent,
+            )
+        )
 
         self._class_stack.append(f"{parent}.{node.name}" if parent else node.name)
         self.generic_visit(node)
@@ -248,28 +295,33 @@ class _FileVisitor(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import):
         for alias in node.names:
-            self.imports.append(ImportEdge(
-                from_file=self.file_path,
-                module=alias.name,
-                names=[],
-                alias=alias.asname,
-                line=node.lineno,
-            ))
+            self.imports.append(
+                ImportEdge(
+                    from_file=self.file_path,
+                    module=alias.name,
+                    names=[],
+                    alias=alias.asname,
+                    line=node.lineno,
+                )
+            )
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         if node.module:
-            self.imports.append(ImportEdge(
-                from_file=self.file_path,
-                module=node.module,
-                names=[alias.name for alias in node.names],
-                alias=None,
-                line=node.lineno,
-            ))
+            self.imports.append(
+                ImportEdge(
+                    from_file=self.file_path,
+                    module=node.module,
+                    names=[alias.name for alias in node.names],
+                    alias=None,
+                    line=node.lineno,
+                )
+            )
 
 
 # ---------------------------------------------------------------------------
 # Usage finder
 # ---------------------------------------------------------------------------
+
 
 class _UsageFinder(ast.NodeVisitor):
     def __init__(self, symbol_name: str, file_path: str, source_lines: list[str]):
@@ -281,12 +333,18 @@ class _UsageFinder(ast.NodeVisitor):
     def _add(self, node: ast.AST):
         line = getattr(node, "lineno", 0)
         col = getattr(node, "col_offset", 0) + 1
-        ctx_line = self.source_lines[line - 1].rstrip() if 0 < line <= len(self.source_lines) else ""
-        self.usages.append(Usage(
-            symbol_name=self.symbol_name,
-            location=Location(self.file_path, line, col),
-            context_line=ctx_line,
-        ))
+        ctx_line = (
+            self.source_lines[line - 1].rstrip()
+            if 0 < line <= len(self.source_lines)
+            else ""
+        )
+        self.usages.append(
+            Usage(
+                symbol_name=self.symbol_name,
+                location=Location(self.file_path, line, col),
+                context_line=ctx_line,
+            )
+        )
 
     def visit_Name(self, node: ast.Name):
         if node.id == self.symbol_name:
@@ -301,6 +359,7 @@ class _UsageFinder(ast.NodeVisitor):
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 class CodeIntelligence:
     """Pure-Python AST-based code intelligence. No third-party deps."""
@@ -320,7 +379,9 @@ class CodeIntelligence:
         try:
             size_kb = Path(abs_path).stat().st_size / 1024
             if size_kb > self.max_file_size_kb:
-                result.parse_error = f"File too large ({size_kb:.0f} KB > {self.max_file_size_kb} KB)"
+                result.parse_error = (
+                    f"File too large ({size_kb:.0f} KB > {self.max_file_size_kb} KB)"
+                )
                 return result
 
             source = Path(abs_path).read_text(encoding="utf-8", errors="replace")
@@ -368,7 +429,9 @@ class CodeIntelligence:
         results = []
         for intel in project_intel.values():
             for sym in intel.symbols:
-                if sym.name == name or (sym.parent and f"{sym.parent}.{sym.name}" == name):
+                if sym.name == name or (
+                    sym.parent and f"{sym.parent}.{sym.name}" == name
+                ):
                     results.append(sym)
         return sorted(results, key=lambda s: (s.location.file, s.location.line))
 
@@ -425,15 +488,16 @@ class CodeIntelligence:
 
         total_symbols = sum(len(i.symbols) for i in project_intel.values())
         total_functions = sum(
-            1 for i in project_intel.values()
-            for s in i.symbols if s.kind in ("function", "async_function", "method", "async_method")
+            1
+            for i in project_intel.values()
+            for s in i.symbols
+            if s.kind in ("function", "async_function", "method", "async_method")
         )
         total_classes = sum(
             1 for i in project_intel.values() for s in i.symbols if s.kind == "class"
         )
         parse_errors = {
-            rel(p): i.parse_error
-            for p, i in project_intel.items() if i.parse_error
+            rel(p): i.parse_error for p, i in project_intel.items() if i.parse_error
         }
 
         return {
@@ -458,9 +522,14 @@ class CodeIntelligence:
             ],
             "large_files": sorted(
                 [
-                    {"file": rel(p), "symbols": len(i.symbols), "functions": len(i.metrics)}
+                    {
+                        "file": rel(p),
+                        "symbols": len(i.symbols),
+                        "functions": len(i.metrics),
+                    }
                     for p, i in project_intel.items()
                 ],
-                key=lambda x: x["functions"], reverse=True
+                key=lambda x: x["functions"],
+                reverse=True,
             )[:top_n],
         }
