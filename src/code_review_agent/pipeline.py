@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from code_review_agent.config import AppConfig, get_config
+from code_review_agent.filters import split_smell_families
 from code_review_agent.llm import LLMClient
 from code_review_agent.prompts import SYNTHESIS_PROMPT
 from code_review_agent.reporter import (
@@ -156,6 +157,7 @@ def run_pipeline(
     on_step: Callable[[str], None] | None = None,
     issue_texts: list[str] | None = None,
     tools: list[str] | tuple[str, ...] | None = None,
+    smell_families: list[str] | tuple[str, ...] | None = None,
 ) -> PipelineResult:
     """Run the selected detectors against a local path. Default: all tools."""
     cfg = cfg or get_config()
@@ -164,6 +166,7 @@ def run_pipeline(
     selected = normalize_pipeline_tools(tools)
     if not selected:
         raise ValueError("Select at least one detector.")
+    py_families, ml_families = split_smell_families(smell_families)
 
     def note(msg: str) -> None:
         if on_step:
@@ -178,9 +181,13 @@ def run_pipeline(
         return analyze_code_intelligence(target, import_graph=True)
 
     def _py():
+        if py_families and len(py_families) < 3:
+            return detect_python_smells(target, analysis_types=py_families)
         return detect_python_smells(target, analysis_type="all")
 
     def _ml():
+        if ml_families and len(ml_families) < 3:
+            return detect_ml_smells(target, families=ml_families)
         return detect_ml_smells(target)
 
     jobs: list[tuple[str, Callable[[], dict[str, Any]]]] = []
@@ -346,6 +353,7 @@ def execute_hybrid_review(
     extra_context: str = "",
     issue_texts: list[str] | None = None,
     tools: list[str] | tuple[str, ...] | None = None,
+    smell_families: list[str] | tuple[str, ...] | None = None,
     parallel: bool = True,
     on_step: Callable[[str], None] | None = None,
 ) -> PipelineResult:
@@ -364,6 +372,7 @@ def execute_hybrid_review(
         on_step=on_step,
         issue_texts=issue_texts,
         tools=tools,
+        smell_families=smell_families,
     )
     result.report.model = resolve_llm_model(model=model, provider=provider, cfg=cfg)
     result.report.provider = result.report.model.split("/", 1)[0]

@@ -77,7 +77,7 @@ def test_run_ask_empty_question():
 
 
 def test_run_review_empty_path():
-    chunks = list(run_review("", None, "local", True, "", None))
+    chunks = list(run_review("", None, "local", True, "", None, None, None))
     assert chunks
     status, report_md, *_ = chunks[-1]
     assert status.startswith("Failed:")

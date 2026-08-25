@@ -264,6 +264,7 @@ def run_review(
     extra_context: str,
     config_path: str | None,
     tools: list[str] | None = None,
+    smell_families: list[str] | None = None,
 ) -> Iterator[tuple]:
     """Generator so the UI can show detector progress.
 
@@ -326,6 +327,7 @@ def run_review(
             extra_context=extra_context or "",
             issue_texts=issue_snippets(cloned.issues) if cloned else None,
             tools=tools,
+            smell_families=smell_families,
             on_step=on_step,
         )
         note = " · ".join(steps) if steps else "Done."
@@ -402,21 +404,43 @@ def rerun_target_from_report(path: str) -> str:
 
 
 def _run_review_ui(
-    path_text, uploads, model, no_llm, extra_context, config_path, tools
+    path_text, uploads, model, no_llm, extra_context, config_path, tools, smell_families
 ) -> Iterator[tuple]:
     for chunk in run_review(
-        path_text, uploads, model, no_llm, extra_context, config_path, tools
+        path_text,
+        uploads,
+        model,
+        no_llm,
+        extra_context,
+        config_path,
+        tools,
+        smell_families=smell_families,
     ):
         status, md, rows, js, saved, choices, selected = chunk
+        cat_update = _category_choices_update(js)
+        frows, fsummary, freport = apply_output_filters(
+            js,
+            md,
+            "info",
+            ["Python smells", "ML smells"],
+            _all_smell_families(),
+            [],
+            "",
+            True,
+            False,
+        )
         yield (
             status,
-            md,
-            rows,
+            freport,
+            frows,
             js,
             saved,
             _dropdown_update(choices, selected),
             md,
             status,
+            md,
+            cat_update,
+            fsummary,
         )
 
 
@@ -429,7 +453,19 @@ def _refresh_archive(config_path: str | None):
 
 def _open_saved_ui(path: str):
     status, md, rows, js, saved = load_saved_report(path)
-    return status, md, rows, js, saved, md, status
+    cat_update = _category_choices_update(js)
+    frows, fsummary, freport = apply_output_filters(
+        js,
+        md,
+        "info",
+        ["Python smells", "ML smells"],
+        _all_smell_families(),
+        [],
+        "",
+        True,
+        False,
+    )
+    return status, freport, frows, js, saved, md, status, md, cat_update, fsummary
 
 
 def run_tool(
@@ -523,11 +559,81 @@ def _no_pipeline_tools() -> list[str]:
     return []
 
 
+def _all_smell_families() -> list[str]:
+    from code_review_agent.filters import default_smell_families
+
+    return default_smell_families()
+
+
+def _category_choices_update(report_json: str):
+    import gradio as gr
+
+    from code_review_agent.filters import category_choices
+
+    if not report_json:
+        return gr.update(choices=[], value=[])
+    try:
+        payload = json.loads(report_json)
+    except json.JSONDecodeError:
+        return gr.update(choices=[], value=[])
+    choices = category_choices(payload.get("findings") or [])
+    return gr.update(choices=choices, value=[])
+
+
+def apply_output_filters(
+    report_json: str,
+    full_report_md: str,
+    min_severity: str,
+    filter_tools: list[str] | None,
+    filter_families: list[str] | None,
+    filter_categories: list[str] | None,
+    search: str,
+    show_td: bool,
+    apply_to_report: bool,
+) -> tuple[list, str, str]:
+    from code_review_agent.dashboard import findings_rows_from_payload
+    from code_review_agent.filters import (
+        filter_findings,
+        filter_td_predictions,
+        render_filtered_summary,
+    )
+
+    if not report_json:
+        empty = "_No findings yet. Run a review first._"
+        return [], empty, full_report_md or empty
+
+    payload = json.loads(report_json)
+    findings = payload.get("findings") or []
+    tool_map = {"Python smells": "python_smells", "ML smells": "ml_smells"}
+    tools = [tool_map[t] for t in (filter_tools or []) if t in tool_map]
+
+    filtered = filter_findings(
+        findings,
+        min_severity=min_severity or "info",
+        tools=tools or None,
+        families=filter_families or None,
+        categories=filter_categories or None,
+        search=search or "",
+    )
+    td_filtered: list = []
+    if show_td:
+        td_filtered = filter_td_predictions(
+            payload.get("td_predictions") or [],
+            search=search or "",
+        )
+
+    rows = findings_rows_from_payload(payload, findings=filtered)
+    summary = render_filtered_summary(payload, filtered, td_filtered=td_filtered)
+    report_view = summary if apply_to_report else (full_report_md or summary)
+    return rows, summary, report_view
+
+
 def build_ui(config_path: str | None = None):
     import gradio as gr
 
     from code_review_agent.config import DEFAULT_LITELLM_MODEL, get_config
     from code_review_agent.dashboard import FINDINGS_HEADERS
+    from code_review_agent.filters import smell_family_choices
     from code_review_agent.pipeline import pipeline_tool_choices
 
     cfg = get_config(config_path)
@@ -586,6 +692,20 @@ def build_ui(config_path: str | None = None):
                             none_btn = gr.Button(
                                 "Clear", size="sm", elem_id="qt-tools-none"
                             )
+                        smell_families = gr.CheckboxGroup(
+                            label="Smell / anti-pattern families to analyze",
+                            choices=smell_family_choices(),
+                            value=_all_smell_families(),
+                            info="Used when Python or ML smell detectors are selected.",
+                            elem_id="qt-smell-families",
+                        )
+                        with gr.Row():
+                            smells_all_btn = gr.Button(
+                                "All smell types", size="sm", elem_id="qt-smells-all"
+                            )
+                            smells_none_btn = gr.Button(
+                                "No smell types", size="sm", elem_id="qt-smells-none"
+                            )
                         no_llm = gr.Checkbox(
                             label="Skip LiteLLM narrative",
                             value=True,
@@ -621,6 +741,56 @@ def build_ui(config_path: str | None = None):
                             "Ready. Choose detectors, enter a path, then run.",
                             elem_id="qt-status",
                         )
+                        full_report_state = gr.State("")
+                        with gr.Accordion(
+                            "Output filters", open=True, elem_id="qt-filters"
+                        ):
+                            filter_min_sev = gr.Dropdown(
+                                label="Minimum severity",
+                                choices=[
+                                    ("All severities", "info"),
+                                    ("Critical+", "critical"),
+                                    ("High+", "high"),
+                                    ("Medium+", "medium"),
+                                    ("Low+", "low"),
+                                ],
+                                value="info",
+                                elem_id="qt-filter-sev",
+                            )
+                            filter_tool_src = gr.CheckboxGroup(
+                                label="Finding source",
+                                choices=["Python smells", "ML smells"],
+                                value=["Python smells", "ML smells"],
+                                elem_id="qt-filter-source",
+                            )
+                            filter_families_out = gr.CheckboxGroup(
+                                label="Smell families in results",
+                                choices=smell_family_choices(),
+                                value=_all_smell_families(),
+                                elem_id="qt-filter-families",
+                            )
+                            filter_categories = gr.CheckboxGroup(
+                                label="Specific smell / anti-pattern names",
+                                choices=[],
+                                value=[],
+                                info="Populated after a review completes.",
+                                elem_id="qt-filter-categories",
+                            )
+                            filter_search = gr.Textbox(
+                                label="Search location, symbol, or message",
+                                placeholder="e.g. Feature Envy  or  decorators.py",
+                                elem_id="qt-filter-search",
+                            )
+                            filter_show_td = gr.Checkbox(
+                                label="Include technical-debt snippets in filtered summary",
+                                value=True,
+                                elem_id="qt-filter-td",
+                            )
+                            filter_apply_report = gr.Checkbox(
+                                label="Apply filters to Report tab (off = full saved report)",
+                                value=False,
+                                elem_id="qt-filter-report",
+                            )
                         with gr.Tabs():
                             with gr.Tab("Report"):
                                 report_md = gr.Markdown(
@@ -631,6 +801,10 @@ def build_ui(config_path: str | None = None):
                                     height=560,
                                 )
                             with gr.Tab("Findings"):
+                                filter_summary_md = gr.Markdown(
+                                    "_Run a review, then narrow results with the filters above._",
+                                    elem_id="qt-filter-summary",
+                                )
                                 findings_df = gr.Dataframe(
                                     headers=FINDINGS_HEADERS,
                                     label="Findings",
@@ -650,11 +824,48 @@ def build_ui(config_path: str | None = None):
 
                 all_btn.click(fn=_all_pipeline_tools, outputs=tool_picks)
                 none_btn.click(fn=_no_pipeline_tools, outputs=tool_picks)
+                smells_all_btn.click(fn=_all_smell_families, outputs=smell_families)
+                smells_none_btn.click(lambda: [], outputs=smell_families)
                 for _comp in (path_in, model_in, no_llm, tool_picks):
                     _comp.change(
                         fn=cli_preview_markdown,
                         inputs=[path_in, model_in, no_llm, tool_picks],
                         outputs=cli_preview,
+                    )
+
+                filter_inputs = [
+                    json_out,
+                    full_report_state,
+                    filter_min_sev,
+                    filter_tool_src,
+                    filter_families_out,
+                    filter_categories,
+                    filter_search,
+                    filter_show_td,
+                    filter_apply_report,
+                ]
+
+                def _apply_filters(*args):
+                    rows, summary, report_view = apply_output_filters(*args)
+                    return rows, summary, report_view
+
+                for _comp in (
+                    filter_min_sev,
+                    filter_tool_src,
+                    filter_families_out,
+                    filter_categories,
+                    filter_search,
+                    filter_show_td,
+                    filter_apply_report,
+                ):
+                    _comp.change(
+                        fn=_apply_filters,
+                        inputs=filter_inputs,
+                        outputs=[
+                            findings_df,
+                            filter_summary_md,
+                            report_md,
+                        ],
                     )
 
             with gr.Tab("Results", elem_id="qt-tab-results"):
@@ -705,6 +916,9 @@ def build_ui(config_path: str | None = None):
                         saved_out,
                         report_md,
                         status_md,
+                        full_report_state,
+                        filter_categories,
+                        filter_summary_md,
                     ],
                 )
                 rerun_btn.click(
@@ -721,6 +935,7 @@ def build_ui(config_path: str | None = None):
                         context_in,
                         cfg_state,
                         tool_picks,
+                        smell_families,
                     ],
                     outputs=[
                         status_md,
@@ -731,6 +946,9 @@ def build_ui(config_path: str | None = None):
                         archive_dd,
                         archive_md,
                         archive_status,
+                        full_report_state,
+                        filter_categories,
+                        filter_summary_md,
                     ],
                 )
 
@@ -744,6 +962,7 @@ def build_ui(config_path: str | None = None):
                     context_in,
                     cfg_state,
                     tool_picks,
+                    smell_families,
                 ],
                 outputs=[
                     status_md,
@@ -754,6 +973,9 @@ def build_ui(config_path: str | None = None):
                     archive_dd,
                     archive_md,
                     archive_status,
+                    full_report_state,
+                    filter_categories,
+                    filter_summary_md,
                 ],
             )
 

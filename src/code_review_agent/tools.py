@@ -71,6 +71,7 @@ def _smell_to_dict(obj: Any) -> dict:
 def detect_ml_smells(
     path: str,
     ignore_dirs: list[str] | None = None,
+    families: list[str] | None = None,
 ) -> dict[str, Any]:
     """Detect ML-specific code smells using ml_code_smell_detector."""
     try:
@@ -102,12 +103,19 @@ def detect_ml_smells(
     }
 
     detectors = [
-        (FrameworkSpecificSmellDetector, "framework_smells"),
-        (HuggingFaceSmellDetector, "huggingface_smells"),
-        (ML_SmellDetector, "general_ml_smells"),
+        (FrameworkSpecificSmellDetector, "framework_smells", "framework"),
+        (HuggingFaceSmellDetector, "huggingface_smells", "huggingface"),
+        (ML_SmellDetector, "general_ml_smells", "general"),
     ]
+    selected = {f.strip() for f in (families or []) if f.strip()} or {
+        "framework",
+        "huggingface",
+        "general",
+    }
 
-    for DetectorCls, key in detectors:
+    for DetectorCls, key, family in detectors:
+        if family not in selected:
+            continue
         detector = DetectorCls()
         for py_file in py_files:
             file_str = str(py_file)
@@ -165,6 +173,7 @@ def detect_ml_smells(
 def detect_python_smells(
     path: str,
     analysis_type: str = "all",
+    analysis_types: list[str] | None = None,
     ignore_dirs: list[str] | None = None,
     config_path: str | None = None,
 ) -> dict[str, Any]:
@@ -202,11 +211,21 @@ def detect_python_smells(
         "tool": "python_smells",
         "target": str(target),
         "analysis_type": analysis_type,
+        "analysis_types": analysis_types,
         "errors": [],
     }
 
+    if analysis_types:
+        run_code = "code" in analysis_types
+        run_arch = "architectural" in analysis_types
+        run_struct = "structural" in analysis_types
+    else:
+        run_code = analysis_type in ("code", "all")
+        run_arch = analysis_type in ("architectural", "all")
+        run_struct = analysis_type in ("structural", "all")
+
     # ---- Code smells ----
-    if analysis_type in ("code", "all"):
+    if run_code:
         try:
             det = (
                 CodeSmellDetector(thresholds=code_thresh)
@@ -234,7 +253,7 @@ def detect_python_smells(
             results["code_smells"] = {"error": str(exc)}
 
     # ---- Architectural smells ----
-    if analysis_type in ("architectural", "all") and target.is_dir():
+    if run_arch and target.is_dir():
         try:
             det = (
                 ArchitecturalSmellDetector(thresholds=arch_thresh)
@@ -249,7 +268,7 @@ def detect_python_smells(
             results["architectural_smells"] = {"error": str(exc)}
 
     # ---- Structural smells ----
-    if analysis_type in ("structural", "all"):
+    if run_struct:
         try:
             det = (
                 StructuralSmellDetector(thresholds=struct_thresh)

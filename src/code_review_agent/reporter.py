@@ -245,6 +245,11 @@ class FindingNormalizer:
                 extra={
                     "benefits": smell.get("benefits", ""),
                     "strategies": smell.get("strategies", ""),
+                    "smell_family": {
+                        "MLFW": "framework",
+                        "MLHF": "huggingface",
+                        "MLGN": "general",
+                    }.get(prefix, "general"),
                 },
             )
         )
@@ -305,6 +310,13 @@ class FindingNormalizer:
                 message=smell.get("description", name),
                 how_to_fix=smell.get("how_to_fix"),
                 code_snippet=smell.get("code_snippet"),
+                extra={
+                    "smell_family": {
+                        "PYCS": "code",
+                        "PYAS": "architectural",
+                        "PYSS": "structural",
+                    }.get(prefix, "code"),
+                },
             )
         )
 

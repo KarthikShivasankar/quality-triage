@@ -121,6 +121,31 @@ def test_run_pipeline_requires_a_tool(tmp_path, monkeypatch):
         raise AssertionError("expected ValueError")
 
 
+def test_run_pipeline_smell_family_subset(tmp_path, monkeypatch):
+    _sample(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config()
+    captured: dict = {}
+
+    def fake_py(target, analysis_type="all", analysis_types=None, **kwargs):
+        captured["analysis_types"] = analysis_types
+        return {"tool": "python_smells", "code_smells": []}
+
+    monkeypatch.setattr("code_review_agent.pipeline.detect_python_smells", fake_py)
+    monkeypatch.setattr(
+        "code_review_agent.pipeline.classify_technical_debt",
+        lambda *a, **k: {"predictions": []},
+    )
+    run_pipeline(
+        str(tmp_path),
+        cfg=cfg,
+        parallel=False,
+        tools=["python-smells"],
+        smell_families=["structural"],
+    )
+    assert captured["analysis_types"] == ["structural"]
+
+
 def test_synthesize_report_uses_health_payload(monkeypatch):
     captured = {}
 

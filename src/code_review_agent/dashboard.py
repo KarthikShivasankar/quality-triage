@@ -59,13 +59,16 @@ def findings_table_rows(data: ReportData, limit: int | None = None) -> list[list
 
 
 def findings_rows_from_payload(
-    payload: dict, limit: int | None = None
+    payload: dict, limit: int | None = None, findings: list | None = None
 ) -> list[list[str]]:
     """Rebuild the findings table from a saved report JSON object."""
-    raw = payload.get("findings") if isinstance(payload, dict) else None
-    if not isinstance(raw, list):
-        return []
-    items = raw[:limit] if limit else raw
+    if findings is None:
+        raw = payload.get("findings") if isinstance(payload, dict) else None
+        if not isinstance(raw, list):
+            return []
+        items = raw[:limit] if limit else raw
+    else:
+        items = findings[:limit] if limit else findings
     rows: list[list[str]] = []
     for finding in items:
         if not isinstance(finding, dict):

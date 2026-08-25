@@ -103,7 +103,11 @@ def main() -> int:
     ok("review/status ok", not str(status).startswith("Failed:"), str(status)[:120])
     ok("review/markdown", "# Code Review Report" in str(report_md), "")
     payload = json.loads(json_text) if json_text else {}
-    ok("review/json health", "health_score" in payload, f"score={payload.get('health_score')}")
+    ok(
+        "review/json health",
+        "health_score" in payload,
+        f"score={payload.get('health_score')}",
+    )
     td = payload.get("td_predictions") or []
     issues = [x for x in td if str(x.get("text", "")).startswith("#")]
     ok(
@@ -111,7 +115,11 @@ def main() -> int:
         len(issues) >= 1,
         f"{len(issues)} issue snippets in {time.time() - t0:.1f}s",
     )
-    ok("review/saved archive", ".md" in str(saved) and ".json" in str(saved), str(saved)[:100])
+    ok(
+        "review/saved archive",
+        ".md" in str(saved) and ".json" in str(saved),
+        str(saved)[:100],
+    )
 
     # --- Results: open saved report ---
     print("\n=== Results: view saved report ===")
@@ -121,7 +129,8 @@ def main() -> int:
         archive_status, archive_md = open_out[0], open_out[1]
         ok(
             "results/view report",
-            "Opened" in str(archive_status) and "# Code Review Report" in str(archive_md),
+            "Opened" in str(archive_status)
+            and "# Code Review Report" in str(archive_md),
             str(archive_status)[:80],
         )
         rerun_path = client.predict(md_path, api_name="/rerun_target_from_report")
