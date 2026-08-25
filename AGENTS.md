@@ -135,7 +135,7 @@ uv sync --extra ui
 code-review app
 ```
 
-`uv sync --group dev` already includes Gradio. The UI runs the same pipeline; prefer the CLI for CI. Pipeline-only is on by default in the UI.
+`uv sync --group dev` already includes Gradio. The UI runs the same pipeline; prefer the CLI for CI. Pipeline-only is on by default in the UI. Each review is stored under `reports/`; the Results tab opens the rendered markdown and can re-run the saved target.
 
 ### GitHub URL
 

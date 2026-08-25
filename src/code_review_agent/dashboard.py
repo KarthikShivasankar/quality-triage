@@ -58,6 +58,38 @@ def findings_table_rows(data: ReportData, limit: int | None = None) -> list[list
     return rows
 
 
+def findings_rows_from_payload(
+    payload: dict, limit: int | None = None
+) -> list[list[str]]:
+    """Rebuild the findings table from a saved report JSON object."""
+    raw = payload.get("findings") if isinstance(payload, dict) else None
+    if not isinstance(raw, list):
+        return []
+    items = raw[:limit] if limit else raw
+    rows: list[list[str]] = []
+    for finding in items:
+        if not isinstance(finding, dict):
+            continue
+        loc = f"{finding.get('file') or ''}:{finding.get('line') or ''}"
+        col = finding.get("col")
+        if col:
+            loc += f":{col}"
+        sev = finding.get("severity")
+        if hasattr(sev, "value"):
+            sev = sev.value
+        rows.append(
+            [
+                str(sev or "").upper(),
+                str(finding.get("finding_id") or finding.get("id") or ""),
+                loc,
+                str(finding.get("category") or ""),
+                str(finding.get("symbol") or ""),
+                str(finding.get("message") or "")[:160],
+            ]
+        )
+    return rows
+
+
 def print_review_dashboard(
     data: ReportData, console: Console, *, top_n: int = 12
 ) -> None:

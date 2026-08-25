@@ -160,15 +160,16 @@ def test_app_run_review_github():
     _require_e2e()
     chunks = list(run_review(GITHUB_SRC, None, "local", True, "", None))
     assert chunks
-    status, html_doc, rows, _narrative, json_text, saved = chunks[-1]
+    status, report_md, rows, json_text, saved, *rest = chunks[-1]
     if status.startswith("Failed:"):
         pytest.skip(f"GitHub review unavailable: {status}")
-    assert "Quality Triage" in html_doc
+    assert "# Code Review Report" in report_md
     payload = json.loads(json_text)
     assert payload.get("files_analyzed", 0) >= 1
     assert "health_score" in payload
     assert isinstance(rows, list)
     assert saved
+    assert ".md" in saved
 
 
 @pytest.mark.e2e

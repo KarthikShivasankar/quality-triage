@@ -705,7 +705,8 @@ def save_report(
 ) -> list[str]:
     """
     Save report to output_dir. Returns list of written file paths.
-    fmt: "markdown" | "json" | "sarif" | "html" | "both"
+    fmt: "markdown" | "json" | "sarif" | "html" | "both" | "archive"
+    archive writes markdown + json + html for the UI results library.
     """
     renderer = ReportRenderer(
         include_code_snippets=include_code_snippets,
@@ -718,11 +719,11 @@ def save_report(
     base = Path(output_dir) / f"review-{target_slug}-{ts}"
 
     written: list[str] = []
-    if fmt in ("markdown", "both"):
+    if fmt in ("markdown", "both", "archive"):
         md_path = str(base) + ".md"
         Path(md_path).write_text(renderer.render_markdown(data), encoding="utf-8")
         written.append(md_path)
-    if fmt in ("json", "both"):
+    if fmt in ("json", "both", "archive"):
         json_path = str(base) + ".json"
         Path(json_path).write_text(renderer.render_json(data), encoding="utf-8")
         written.append(json_path)
@@ -730,8 +731,103 @@ def save_report(
         sarif_path = str(base) + ".sarif"
         Path(sarif_path).write_text(renderer.render_sarif(data), encoding="utf-8")
         written.append(sarif_path)
-    if fmt == "html":
+    if fmt in ("html", "archive"):
         html_path = str(base) + ".html"
         Path(html_path).write_text(renderer.render_html(data), encoding="utf-8")
         written.append(html_path)
     return written
+
+
+@dataclass
+class StoredReport:
+    path: str
+    label: str
+    target: str = ""
+    health_score: int | None = None
+    finding_count: int | None = None
+    saved_at: str = ""
+
+
+def list_stored_reports(output_dir: str, limit: int = 40) -> list[StoredReport]:
+    """Newest-first markdown reports in output_dir (``review-*.md``)."""
+    root = Path(output_dir)
+    if not root.is_dir():
+        return []
+    files = sorted(
+        root.glob("review-*.md"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    out: list[StoredReport] = []
+    for md in files[:limit]:
+        payload: dict[str, Any] = {}
+        json_path = md.with_suffix(".json")
+        if json_path.is_file():
+            try:
+                loaded = json.loads(json_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
+            except (OSError, json.JSONDecodeError):
+                payload = {}
+        target = str(payload.get("target") or "")
+        health = payload.get("health_score")
+        try:
+            health_i = int(health) if health is not None else None
+        except (TypeError, ValueError):
+            health_i = None
+        findings = payload.get("findings")
+        n_findings = len(findings) if isinstance(findings, list) else None
+        mtime = datetime.fromtimestamp(md.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        bits = [md.name, mtime]
+        if health_i is not None:
+            bits.append(f"health {health_i}")
+        if n_findings is not None:
+            bits.append(f"{n_findings} findings")
+        if target:
+            bits.append(Path(target).name)
+        out.append(
+            StoredReport(
+                path=str(md.resolve()),
+                label=" · ".join(bits),
+                target=target,
+                health_score=health_i,
+                finding_count=n_findings,
+                saved_at=mtime,
+            )
+        )
+    return out
+
+
+def stored_report_choices(output_dir: str) -> list[tuple[str, str]]:
+    """Gradio dropdown choices: (label, markdown path)."""
+    return [(item.label, item.path) for item in list_stored_reports(output_dir)]
+
+
+def load_stored_markdown(path: str) -> str:
+    """Read a saved markdown report (or sibling .md next to a .json/.html file)."""
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(path)
+    if p.suffix.lower() == ".md":
+        return p.read_text(encoding="utf-8")
+    md = p.with_suffix(".md")
+    if md.is_file():
+        return md.read_text(encoding="utf-8")
+    if p.suffix.lower() == ".json":
+        return f"```json\n{p.read_text(encoding='utf-8')}\n```"
+    return p.read_text(encoding="utf-8")
+
+
+def stored_report_payload(path: str) -> dict[str, Any]:
+    json_path = Path(path).with_suffix(".json")
+    if not json_path.is_file():
+        return {}
+    try:
+        loaded = json.loads(json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def target_from_stored(path: str) -> str:
+    return str(stored_report_payload(path).get("target") or "")

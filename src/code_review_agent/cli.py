@@ -218,35 +218,34 @@ def _emit_report(
         written = save_report(
             data,
             output_dir=cfg.report.output_dir,
-            fmt="html",
+            fmt="archive",
             include_code_snippets=include,
             max_snippet_lines=max_snip,
         )
         if not quiet:
-            console.print(f"[green]HTML saved to:[/green] {', '.join(written)}")
+            console.print(f"[green]Saved to:[/green] {', '.join(written)}")
         return written
 
     if use_dashboard and not verbose:
         if not quiet:
             console.print(
-                "\n[dim]Full markdown: pass --output reports/review.md "
-                "(or -v to print it here).[/dim]"
+                "\n[dim]Full markdown is saved under reports/ "
+                "(pass -v to print it here).[/dim]"
             )
     else:
         console.print(
             _render_report_text(data, "markdown", include, max_snip),
             markup=False,
         )
-    if fmt == "both":
-        written = save_report(
-            data,
-            output_dir=cfg.report.output_dir,
-            fmt="json",
-            include_code_snippets=include,
-            max_snippet_lines=max_snip,
-        )
-        if not quiet:
-            console.print(f"[green]JSON saved to:[/green] {', '.join(written)}")
+    written = save_report(
+        data,
+        output_dir=cfg.report.output_dir,
+        fmt="archive",
+        include_code_snippets=include,
+        max_snippet_lines=max_snip,
+    )
+    if not quiet:
+        console.print(f"[green]Saved to:[/green] {', '.join(written)}")
     return written
 
 

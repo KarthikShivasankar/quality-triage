@@ -231,6 +231,36 @@ def test_render_html_and_save(tmp_path):
     assert "inspection slip" in __import__("pathlib").Path(written[0]).read_text()
 
 
+def test_save_report_archive_and_list(tmp_path):
+    from code_review_agent.reporter import (
+        list_stored_reports,
+        load_stored_markdown,
+        stored_report_choices,
+        target_from_stored,
+    )
+
+    data = build_report(
+        target=str(tmp_path / "myproj"),
+        provider="ollama",
+        model="x",
+        ml_raw=_ml_raw(),
+    )
+    out = tmp_path / "reports"
+    written = save_report(data, output_dir=str(out), fmt="archive")
+    suffixes = {__import__("pathlib").Path(p).suffix for p in written}
+    assert suffixes == {".md", ".json", ".html"}
+    listed = list_stored_reports(str(out))
+    assert len(listed) == 1
+    assert listed[0].path.endswith(".md")
+    assert listed[0].health_score == data.health_score
+    md = load_stored_markdown(listed[0].path)
+    assert "# Code Review Report" in md
+    assert "Health score:" in md
+    choices = stored_report_choices(str(out))
+    assert choices[0][1] == listed[0].path
+    assert str(tmp_path / "myproj") in target_from_stored(listed[0].path)
+
+
 def test_ml_smells_dict_container():
     raw = {
         "framework_smells": [

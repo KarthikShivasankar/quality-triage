@@ -87,10 +87,10 @@ def test_run_ask_empty_question():
 def test_run_review_empty_path():
     chunks = list(run_review("", None, "local", True, "", None))
     assert chunks
-    status, html_doc, *_ = chunks[-1]
+    status, report_md, *_ = chunks[-1]
     assert status.startswith("Failed:")
-    assert "code-review review" in html_doc
-    assert "&lt;path&gt;" in html_doc
+    assert "code-review review" in report_md
+    assert "<path>" in report_md or "`code-review review" in report_md
 
 
 def test_run_review_pipeline_only(tmp_path, monkeypatch):
@@ -98,14 +98,18 @@ def test_run_review_pipeline_only(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     chunks = list(run_review(str(tmp_path), None, "local", True, "", None))
     assert len(chunks) >= 1
-    status, html_doc, rows, narrative, json_text, saved = chunks[-1]
+    status, report_md, rows, json_text, saved, *rest = chunks[-1]
     assert not status.startswith("Failed:"), status
-    assert "Quality Triage" in html_doc
+    assert "# Code Review Report" in report_md
+    assert "Health score:" in report_md
     payload = json.loads(json_text)
     assert "health_score" in payload
     assert isinstance(rows, list)
-    assert "pipeline" in narrative.lower() or "synthesis" in narrative.lower()
     assert saved
+    assert ".md" in saved
+    choices = rest[0] if rest else []
+    assert isinstance(choices, list)
+    assert any(path.endswith(".md") for _, path in choices)
 
 
 def test_run_review_github_forwards_issue_texts(tmp_path, monkeypatch):
@@ -146,14 +150,7 @@ def test_run_review_github_forwards_issue_texts(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("code_review_agent.pipeline.execute_hybrid_review", fake_exec)
     monkeypatch.setattr(
-        "code_review_agent.dashboard.render_html_report",
-        lambda report: "<p>Quality Triage</p>",
-    )
-    monkeypatch.setattr(
-        "code_review_agent.dashboard.findings_table_rows", lambda report: []
-    )
-    monkeypatch.setattr(
-        "code_review_agent.reporter.save_report", lambda *a, **k: ["/tmp/x.html"]
+        "code_review_agent.reporter.save_report", lambda *a, **k: ["/tmp/x.md"]
     )
     chunks = list(
         run_review("https://github.com/acme/demo", None, "local", True, "", None)
@@ -170,8 +167,25 @@ def test_build_ui_imports():
 
     demo = build_ui()
     assert demo is not None
-    html = str(demo)
-    assert "qt-run-review" in html or demo.title == "Quality Triage"
+    assert demo.title == "Quality Triage"
+
+
+def test_load_saved_report(tmp_path):
+    from code_review_agent.app import load_saved_report, rerun_target_from_report
+    from code_review_agent.reporter import build_report, save_report
+
+    data = build_report(target=str(tmp_path / "proj"), provider="ollama", model="x")
+    written = save_report(data, output_dir=str(tmp_path / "reports"), fmt="archive")
+    md_path = next(p for p in written if p.endswith(".md"))
+    status, markdown, rows, json_text, saved = load_saved_report(md_path)
+    assert "Opened" in status
+    assert "# Code Review Report" in markdown
+    assert saved == md_path
+    assert json_text
+    assert rerun_target_from_report(md_path).endswith("proj")
+    empty_status, empty_md, *_ = load_saved_report("")
+    assert "Pick a saved report" in empty_status
+    assert "No report selected" in empty_md
 
 
 def _free_port() -> int:

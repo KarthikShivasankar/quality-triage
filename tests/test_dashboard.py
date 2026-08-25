@@ -57,3 +57,26 @@ def test_print_review_dashboard_does_not_crash():
     text = console.export_text()
     assert "Quality Triage" in text
     assert "Health" in text
+
+
+def test_findings_rows_from_payload():
+    from code_review_agent.dashboard import findings_rows_from_payload
+
+    rows = findings_rows_from_payload(
+        {
+            "findings": [
+                {
+                    "severity": "high",
+                    "finding_id": "PY-1",
+                    "file": "a.py",
+                    "line": 3,
+                    "col": 2,
+                    "category": "long_method",
+                    "symbol": "run",
+                    "message": "too long",
+                }
+            ]
+        }
+    )
+    assert rows[0][0] == "HIGH"
+    assert "a.py:3:2" in rows[0][2]

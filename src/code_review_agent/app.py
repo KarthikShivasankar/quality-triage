@@ -7,7 +7,6 @@ pipeline. Launch with:  code-review app
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import shutil
@@ -66,15 +65,21 @@ def tool_preview_markdown(tool_name: str, path: str) -> str:
     return f"**CLI equivalent:** `{equivalent_cli_tool(tool_name, path)}`"
 
 
-def _error_html(message: str, cli: str) -> str:
-    return (
-        "<div style=\"font-family:'Source Sans 3',system-ui,sans-serif;color:#1F1A14;"
-        'border:1px solid #C4B8A5;padding:1rem 1.2rem;background:#F4EEE4">'
-        f'<p style="margin:0 0 0.6rem">{html.escape(message)}</p>'
-        "<p style=\"margin:0;font-family:'IBM Plex Mono',monospace;"
-        'font-size:0.85rem;color:#3D4A52">'
-        f"CLI: <code>{html.escape(cli)}</code></p></div>"
-    )
+def _error_markdown(message: str, cli: str) -> str:
+    return f"**Could not run review.** {message}\n\nCLI: `{cli}`"
+
+
+def _archive_choices(output_dir: str) -> list[tuple[str, str]]:
+    from code_review_agent.reporter import stored_report_choices
+
+    return stored_report_choices(output_dir)
+
+
+def _dropdown_update(choices: list[tuple[str, str]], selected: str | None):
+    import gradio as gr
+
+    value = selected if selected else (choices[0][1] if choices else None)
+    return gr.update(choices=choices, value=value)
 
 
 _CSS = """
@@ -104,6 +109,58 @@ button.primary, .primary {
   border-color: var(--qt-copper) !important;
 }
 footer { display: none !important; }
+#qt-report-md, #qt-archive-md {
+  background: #F4EEE4 !important;
+  border: 1px solid var(--qt-rule);
+  border-radius: 8px;
+  padding: 0.4rem 0.2rem 1.2rem;
+}
+#qt-report-md h1, #qt-archive-md h1,
+#qt-report-md .md h1, #qt-archive-md .md h1 {
+  font-family: Fraunces, Georgia, serif !important;
+  font-size: 1.55rem;
+  margin: 0.4rem 0 0.8rem;
+}
+#qt-report-md h2, #qt-archive-md h2,
+#qt-report-md .md h2, #qt-archive-md .md h2 {
+  font-family: Fraunces, Georgia, serif !important;
+  font-size: 1.2rem;
+  margin: 1.2rem 0 0.5rem;
+  border-bottom: 1px solid var(--qt-rule);
+  padding-bottom: 0.25rem;
+}
+#qt-report-md table, #qt-archive-md table,
+#qt-report-md .md table, #qt-archive-md .md table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.7rem 0 1.1rem;
+  font-size: 0.92rem;
+}
+#qt-report-md th, #qt-archive-md th,
+#qt-report-md td, #qt-archive-md td,
+#qt-report-md .md th, #qt-archive-md .md th,
+#qt-report-md .md td, #qt-archive-md .md td {
+  border: 1px solid var(--qt-rule);
+  padding: 0.35rem 0.6rem;
+  text-align: left;
+}
+#qt-report-md th, #qt-archive-md th,
+#qt-report-md .md th, #qt-archive-md .md th {
+  background: #E8DFD0;
+}
+#qt-report-md pre, #qt-archive-md pre,
+#qt-report-md .md pre, #qt-archive-md .md pre {
+  background: #E8DFD0;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+}
+#qt-report-md code, #qt-archive-md code,
+#qt-report-md .md code, #qt-archive-md .md code {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.88em;
+}
 """
 
 
@@ -196,25 +253,42 @@ def run_review(
     extra_context: str,
     config_path: str | None,
 ) -> Iterator[tuple]:
-    """Generator so the UI can show detector progress."""
-    from code_review_agent.dashboard import (
-        findings_table_rows,
-        render_html_report,
-    )
-    from code_review_agent.pipeline import execute_hybrid_review
-    from code_review_agent.reporter import ReportRenderer, save_report
+    """Generator so the UI can show detector progress.
 
-    empty_table = []
+    Yields:
+      status, report_markdown, findings_rows, json_text, saved_paths,
+      archive_choices, selected_report_path
+    """
+    from code_review_agent.dashboard import findings_table_rows
+    from code_review_agent.pipeline import execute_hybrid_review
+    from code_review_agent.reporter import (
+        ReportRenderer,
+        save_report,
+        stored_report_choices,
+    )
+
+    empty_table: list = []
     cloned = None
     uploaded_dir = None
+    output_dir = "./reports"
     try:
         cfg = _load_cfg(config_path)
+        output_dir = cfg.report.output_dir
+        choices = stored_report_choices(output_dir)
         if not (path_text or "").strip() and not _as_file_list(uploads):
             raise ValueError(
                 "Enter a local path or GitHub URL, or upload Python files."
             )
         cli = equivalent_cli_review(path_text, no_llm=no_llm, model=model)
-        yield f"Running… `{cli}`", "<p>Running detectors…</p>", empty_table, "", "", ""
+        yield (
+            f"Running… `{cli}`",
+            "_Running detectors…_",
+            empty_table,
+            "",
+            "",
+            choices,
+            None,
+        )
 
         review_path, cloned, is_upload = _prepare_target(path_text, uploads, cfg)
         if is_upload and not cloned:
@@ -241,31 +315,104 @@ def run_review(
         if result.synthesis_error:
             note += f" Synthesis failed: {result.synthesis_error}"
 
-        html_doc = render_html_report(result.report)
-        rows = findings_table_rows(result.report)
-        narrative = (
-            result.report.narrative or "_No synthesis (pipeline-only or model error)._"
+        renderer = ReportRenderer(
+            include_code_snippets=cfg.report.include_code_snippets,
+            max_snippet_lines=cfg.report.max_snippet_lines,
         )
-        json_text = ReportRenderer().render_json(result.report)
+        report_md = renderer.render_markdown(result.report)
+        rows = findings_table_rows(result.report)
+        json_text = renderer.render_json(result.report)
         written = save_report(
             result.report,
             output_dir=cfg.report.output_dir,
-            fmt="html",
+            fmt="archive",
+            include_code_snippets=cfg.report.include_code_snippets,
+            max_snippet_lines=cfg.report.max_snippet_lines,
         )
-        saved = written[0] if written else ""
-        yield note, html_doc, rows, narrative, json_text, saved
+        saved = ", ".join(written)
+        md_path = next(
+            (w for w in written if w.endswith(".md")), written[0] if written else None
+        )
+        choices = stored_report_choices(output_dir)
+        note += f"  \nSaved `{saved}`"
+        yield note, report_md, rows, json_text, saved, choices, md_path
     except Exception as exc:
         cli = equivalent_cli_review(path_text, no_llm=no_llm, model=model)
+        choices = stored_report_choices(output_dir)
         yield (
             f"Failed: {exc}",
-            _error_html(f"Could not run review. {exc}", cli),
+            _error_markdown(str(exc), cli),
             empty_table,
             "",
             "",
-            "",
+            choices,
+            None,
         )
     finally:
         _cleanup(cloned, uploaded_dir)
+
+
+def load_saved_report(path: str) -> tuple[str, str, list, str, str]:
+    """Open a stored markdown report for the Results tab."""
+    from code_review_agent.dashboard import findings_rows_from_payload
+    from code_review_agent.reporter import (
+        load_stored_markdown,
+        stored_report_payload,
+    )
+
+    if not (path or "").strip():
+        return "Pick a saved report first.", "_No report selected._", [], "", ""
+    try:
+        markdown = load_stored_markdown(path)
+        payload = stored_report_payload(path)
+        rows = findings_rows_from_payload(payload)
+        json_text = ""
+        json_path = Path(path).with_suffix(".json")
+        if json_path.is_file():
+            json_text = json_path.read_text(encoding="utf-8")
+        status = f"Opened `{path}`"
+        return status, markdown, rows, json_text, path
+    except Exception as exc:
+        return f"Failed: {exc}", f"**Could not open report.** {exc}", [], "", path or ""
+
+
+def rerun_target_from_report(path: str) -> str:
+    from code_review_agent.reporter import target_from_stored
+
+    if not (path or "").strip():
+        return ""
+    return target_from_stored(path)
+
+
+def _run_review_ui(
+    path_text, uploads, model, no_llm, extra_context, config_path
+) -> Iterator[tuple]:
+    for chunk in run_review(
+        path_text, uploads, model, no_llm, extra_context, config_path
+    ):
+        status, md, rows, js, saved, choices, selected = chunk
+        yield (
+            status,
+            md,
+            rows,
+            js,
+            saved,
+            _dropdown_update(choices, selected),
+            md,
+            status,
+        )
+
+
+def _refresh_archive(config_path: str | None):
+    cfg = _load_cfg(config_path)
+    choices = _archive_choices(cfg.report.output_dir)
+    selected = choices[0][1] if choices else None
+    return _dropdown_update(choices, selected)
+
+
+def _open_saved_ui(path: str):
+    status, md, rows, js, saved = load_saved_report(path)
+    return status, md, rows, js, saved, md, status
 
 
 def run_tool(
@@ -470,8 +617,8 @@ def build_ui(config_path: str | None = None):
             </h1>
             <p style="color:#3D4A52;margin:0 0 1rem">
               Prefer the CLI: <code>code-review review ./src --no-llm --output reports/review.md</code>.
-              This window is optional. Detectors run first; uncheck pipeline-only to add LiteLLM.
-              Default local GGUF is completion-only — do not use Ask / --agentic on it.
+              This window is optional. Run a review, read the rendered markdown report,
+              and reopen anything saved under <code>reports/</code> in the Results tab.
             </p>
             """,
             padding=False,
@@ -522,25 +669,33 @@ def build_ui(config_path: str | None = None):
                     "Run review", variant="primary", elem_id="qt-run-review"
                 )
                 status_md = gr.Markdown(
-                    "Ready. Empty path shows the CLI equivalent instead of hanging.",
+                    "Ready. Enter a path and run — the markdown report is saved to `reports/`.",
                     elem_id="qt-status",
                 )
-                dash_html = gr.HTML(padding=False, elem_id="qt-dashboard")
-                findings_df = gr.Dataframe(
-                    headers=FINDINGS_HEADERS,
-                    label="Findings",
-                    interactive=False,
-                    wrap=True,
-                    elem_id="qt-findings",
-                )
                 with gr.Tabs():
-                    with gr.Tab("Narrative"):
-                        narrative_md = gr.Markdown()
+                    with gr.Tab("Report"):
+                        report_md = gr.Markdown(
+                            "_No report yet. Run a review or open one in **Results**._",
+                            elem_id="qt-report-md",
+                            elem_classes=["qt-report"],
+                            line_breaks=True,
+                            height=560,
+                        )
+                    with gr.Tab("Findings"):
+                        findings_df = gr.Dataframe(
+                            headers=FINDINGS_HEADERS,
+                            label="Findings",
+                            interactive=False,
+                            wrap=True,
+                            elem_id="qt-findings",
+                        )
                     with gr.Tab("JSON"):
                         json_out = gr.Code(language="json", label="Report JSON")
-                    with gr.Tab("Saved file"):
+                    with gr.Tab("Saved files"):
                         saved_out = gr.Textbox(
-                            label="HTML report path", interactive=False
+                            label="Written paths (markdown, JSON, HTML)",
+                            interactive=False,
+                            elem_id="qt-saved",
                         )
 
                 for _comp in (path_in, model_in, no_llm):
@@ -549,18 +704,96 @@ def build_ui(config_path: str | None = None):
                         inputs=[path_in, model_in, no_llm],
                         outputs=cli_preview,
                     )
-                run_btn.click(
-                    fn=run_review,
-                    inputs=[path_in, uploads, model_in, no_llm, context_in, cfg_state],
+
+            with gr.Tab("Results", elem_id="qt-tab-results"):
+                gr.Markdown(
+                    "Every review writes markdown, JSON, and HTML under `reports/`. "
+                    "Open a file here to read the rendered markdown, or re-run that target."
+                )
+                archive_dd = gr.Dropdown(
+                    label="Saved reports",
+                    choices=_archive_choices(cfg.report.output_dir),
+                    value=None,
+                    interactive=True,
+                    elem_id="qt-archive",
+                )
+                with gr.Row():
+                    refresh_btn = gr.Button(
+                        "Refresh list", elem_id="qt-archive-refresh"
+                    )
+                    open_btn = gr.Button(
+                        "View report", variant="primary", elem_id="qt-archive-open"
+                    )
+                    rerun_btn = gr.Button("Re-run target", elem_id="qt-archive-rerun")
+                archive_status = gr.Markdown(
+                    "Pick a saved report, then View or Re-run.",
+                    elem_id="qt-archive-status",
+                )
+                archive_md = gr.Markdown(
+                    "_No saved report open._",
+                    elem_id="qt-archive-md",
+                    elem_classes=["qt-report"],
+                    line_breaks=True,
+                    height=560,
+                )
+                refresh_btn.click(
+                    fn=_refresh_archive,
+                    inputs=[cfg_state],
+                    outputs=[archive_dd],
+                )
+                open_btn.click(
+                    fn=_open_saved_ui,
+                    inputs=[archive_dd],
                     outputs=[
-                        status_md,
-                        dash_html,
+                        archive_status,
+                        archive_md,
                         findings_df,
-                        narrative_md,
                         json_out,
                         saved_out,
+                        report_md,
+                        status_md,
                     ],
                 )
+                rerun_btn.click(
+                    fn=rerun_target_from_report,
+                    inputs=[archive_dd],
+                    outputs=[path_in],
+                ).then(
+                    fn=_run_review_ui,
+                    inputs=[
+                        path_in,
+                        uploads,
+                        model_in,
+                        no_llm,
+                        context_in,
+                        cfg_state,
+                    ],
+                    outputs=[
+                        status_md,
+                        report_md,
+                        findings_df,
+                        json_out,
+                        saved_out,
+                        archive_dd,
+                        archive_md,
+                        archive_status,
+                    ],
+                )
+
+            run_btn.click(
+                fn=_run_review_ui,
+                inputs=[path_in, uploads, model_in, no_llm, context_in, cfg_state],
+                outputs=[
+                    status_md,
+                    report_md,
+                    findings_df,
+                    json_out,
+                    saved_out,
+                    archive_dd,
+                    archive_md,
+                    archive_status,
+                ],
+            )
 
             with gr.Tab("Tools", elem_id="qt-tab-tools"):
                 gr.Markdown(

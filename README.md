@@ -171,7 +171,7 @@ uv sync --extra ui
 code-review app
 ```
 
-`uv sync --group dev` already includes Gradio. The window is a companion, not a second product: prefer `code-review review` for CI and scripting. The default LFM2.5 GGUF is completion-only — do not use the Ask tab or `--agentic` on it.
+`uv sync --group dev` already includes Gradio. The window is a companion, not a second product: prefer `code-review review` for CI and scripting. Reviews are saved under `reports/` as markdown, JSON, and HTML. The **Report** tab renders that markdown; **Results** lists prior runs so you can reopen or re-run them. The default LFM2.5 GGUF is completion-only — do not use the Ask tab or `--agentic` on it.
 
 ## Development
 

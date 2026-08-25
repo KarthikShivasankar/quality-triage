@@ -231,6 +231,22 @@ def test_review_html_output(tmp_path, monkeypatch):
     assert "Quality Triage" in out.read_text()
 
 
+def test_review_autosaves_markdown_archive(tmp_path, monkeypatch):
+    (tmp_path / "app.py").write_text("def foo():\n    return 1\n")
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["-q", "review", str(tmp_path), "--no-llm", "--fail-on", "none"],
+    )
+    assert result.exit_code == EXIT_OK, result.output
+    reports = list((tmp_path / "reports").glob("review-*.md"))
+    assert reports
+    text = reports[0].read_text(encoding="utf-8")
+    assert "# Code Review Report" in text
+    assert (tmp_path / "reports" / reports[0].with_suffix(".json").name).is_file()
+
+
 def test_review_json_includes_health(tmp_path, monkeypatch):
     (tmp_path / "app.py").write_text("def foo():\n    return 1\n")
     monkeypatch.chdir(tmp_path)
