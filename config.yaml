@@ -111,6 +111,9 @@ code_smells:
   EXCESSIVE_COMMENTS_RATIO:
     value: 0.3
     explanation: "Ratio of comment lines to total lines."
+  LARGE_COMMENT_BLOCKS:
+    value: 2
+    explanation: "Number of comment blocks longer than 5 lines (used with EXCESSIVE_COMMENTS_RATIO)."
   LAZY_CLASS_METHODS:
     value: 4
     explanation: "Classes with this few methods or fewer are lazy."

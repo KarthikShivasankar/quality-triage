@@ -83,6 +83,9 @@ SYNTHESIS_PROMPT = """You are a staff engineer writing a short code-review narra
 The JSON already lists every finding with file:line. Do not re-list them all.
 Small local models: stay under ~400 words. Prefer bullets over prose.
 
+Output the report only. First line must be exactly: ## Executive summary
+Do not restate these instructions. Do not plan out loud.
+
 Write compact Markdown with these headings only:
 
 ## Executive summary

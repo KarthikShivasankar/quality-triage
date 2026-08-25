@@ -5,6 +5,7 @@ from __future__ import annotations
 from code_review_agent.config import LLMConfig, load_config
 from code_review_agent.llm import CompletionResult, LLMClient
 from code_review_agent.pipeline import (
+    clean_synthesis,
     execute_hybrid_review,
     extract_debt_comments,
     run_pipeline,
@@ -68,6 +69,58 @@ def test_run_pipeline_no_llm(tmp_path, monkeypatch):
     assert result.files_raw.get("total_files") >= 2
 
 
+def test_normalize_and_run_pipeline_subset(tmp_path, monkeypatch):
+    from code_review_agent.pipeline import normalize_pipeline_tools
+
+    assert normalize_pipeline_tools(None)[-1] == "classify-td"
+    assert normalize_pipeline_tools(["ml-smells", "bogus"]) == ["ml-smells"]
+    assert normalize_pipeline_tools([]) == []
+
+    _sample(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    cfg = load_config()
+    called = {"td": 0, "ml": 0, "py": 0}
+
+    monkeypatch.setattr(
+        "code_review_agent.pipeline.classify_technical_debt",
+        lambda *a, **k: (
+            called.__setitem__("td", called["td"] + 1) or {"predictions": []}
+        ),
+    )
+    monkeypatch.setattr(
+        "code_review_agent.pipeline.detect_ml_smells",
+        lambda *a, **k: called.__setitem__("ml", called["ml"] + 1) or {"tool": "ml"},
+    )
+    monkeypatch.setattr(
+        "code_review_agent.pipeline.detect_python_smells",
+        lambda *a, **k: called.__setitem__("py", called["py"] + 1) or {"tool": "py"},
+    )
+    result = run_pipeline(
+        str(tmp_path),
+        cfg=cfg,
+        parallel=False,
+        tools=["list-files", "ml-smells"],
+    )
+    assert called["ml"] == 1
+    assert called["td"] == 0
+    assert called["py"] == 0
+    assert "detect_ml_smells" in result.report.tools_run
+    assert "detect_python_smells" not in result.report.tools_run
+    assert "classify_technical_debt" not in result.report.tools_run
+
+
+def test_run_pipeline_requires_a_tool(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    cfg = load_config()
+    try:
+        run_pipeline(str(tmp_path), cfg=cfg, parallel=False, tools=[])
+    except ValueError as exc:
+        assert "at least one" in str(exc).lower()
+    else:
+        raise AssertionError("expected ValueError")
+
+
 def test_synthesize_report_uses_health_payload(monkeypatch):
     captured = {}
 
@@ -81,6 +134,30 @@ def test_synthesize_report_uses_health_payload(monkeypatch):
     assert "Health 90" in text
     user = captured["messages"][1]["content"]
     assert "health_score" in user
+
+
+def test_clean_synthesis_strips_think_preamble():
+    raw = "I will plan the report.\n</think>\n## Executive summary\nHealth 80\n"
+    assert clean_synthesis(raw) == "## Executive summary\nHealth 80"
+    nested = (
+        "## Executive summary\nOne short paragraph.\n\n"
+        "## Executive summary\nThe real narrative"
+    )
+    assert clean_synthesis(nested) == "## Executive summary\nThe real narrative"
+    assert clean_synthesis("") == ""
+
+
+def test_synthesize_report_cleans_model_preamble():
+    class Fake(LLMClient):
+        def complete_text(self, messages, tools=None):
+            return CompletionResult(
+                content="thinking…</think>\n## Executive summary\nHealth 90"
+            )
+
+    data = build_report(target="/proj", provider="ollama", model="x")
+    text = synthesize_report(data, Fake(LLMConfig()))
+    assert text.startswith("## Executive summary")
+    assert "thinking" not in text
 
 
 def test_stream_synthesis(monkeypatch):

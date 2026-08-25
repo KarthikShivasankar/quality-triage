@@ -561,6 +561,8 @@ class TestDetectPythonSmellsTool:
 
         result = detect_python_smells(str(sample_py_dir), analysis_type="code")
         assert "code_smells" in result
+        for err in result.get("errors") or []:
+            assert "LARGE_COMMENT_BLOCKS" not in str(err)
 
     def test_structural_smells_only(self, sample_py_dir):
         from code_review_agent.tools import detect_python_smells
@@ -920,6 +922,8 @@ class TestHybridSynthesisLive:
             pytest.skip(f"synthesis unavailable: {result.synthesis_error}")
         assert result.report.narrative
         assert result.report.health_score >= 0
+        assert "</think>" not in result.report.narrative
+        assert "## Executive summary" in result.report.narrative
 
 
 # ===========================================================================

@@ -76,6 +76,7 @@ Flags that matter:
 - `--fail-on none|critical|high|medium|low|info` (CI: exit 2 when findings meet threshold)
 - `--ci` — no color, stderr progress, `--fail-on high` unless overridden
 - `--no-llm` — pipeline only
+- `--tool` — repeatable detector (`list-files`, `code-intel`, `python-smells`, `ml-smells`, `classify-td`; default all)
 - `--agentic` — LLM chooses tools (non-deterministic)
 - `--output` — persist the report
 - `--keep-clone` — keep a cloned GitHub repo

@@ -8,17 +8,10 @@ pipeline. Launch with:  code-review app
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import subprocess
-import sys
 import tempfile
-import time
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterator
-
-ROOT = Path(__file__).resolve().parents[2]
 
 
 def equivalent_cli_review(
@@ -26,14 +19,21 @@ def equivalent_cli_review(
     *,
     no_llm: bool = True,
     model: str | None = None,
+    tools: list[str] | None = None,
 ) -> str:
     """CLI command that matches a Gradio review run."""
+    from code_review_agent.pipeline import PIPELINE_TOOL_IDS, normalize_pipeline_tools
+
     parts = ["code-review", "review", (path or "").strip() or "<path>"]
     model = (model or "").strip()
     if model and model not in {"local"}:
         parts += ["--model", model]
     if no_llm:
         parts.append("--no-llm")
+    selected = normalize_pipeline_tools(tools)
+    if selected != list(PIPELINE_TOOL_IDS):
+        for tool in selected:
+            parts += ["--tool", tool]
     return " ".join(parts)
 
 
@@ -54,10 +54,10 @@ def equivalent_cli_tool(tool_name: str, path: str) -> str:
     return f"code-review run-tool {cmd} {(path or '').strip() or '<path>'}"
 
 
-def cli_preview_markdown(path: str, model: str, no_llm: bool) -> str:
+def cli_preview_markdown(path: str, model: str, no_llm: bool, tools=None) -> str:
     return (
         "**CLI equivalent:** "
-        f"`{equivalent_cli_review(path, no_llm=no_llm, model=model)}`"
+        f"`{equivalent_cli_review(path, no_llm=no_llm, model=model, tools=tools)}`"
     )
 
 
@@ -108,7 +108,18 @@ button.primary, .primary {
   background: var(--qt-copper) !important;
   border-color: var(--qt-copper) !important;
 }
-footer { display: none !important; }
+#qt-tools {
+  background: #F4EEE4 !important;
+  border: 1px solid var(--qt-rule);
+  border-radius: 8px;
+}
+#qt-run-review {
+  min-height: 2.6rem;
+  font-size: 1.05rem !important;
+}
+.qt-setup {
+  min-width: 280px;
+}
 #qt-report-md, #qt-archive-md {
   background: #F4EEE4 !important;
   border: 1px solid var(--qt-rule);
@@ -252,6 +263,7 @@ def run_review(
     no_llm: bool,
     extra_context: str,
     config_path: str | None,
+    tools: list[str] | None = None,
 ) -> Iterator[tuple]:
     """Generator so the UI can show detector progress.
 
@@ -279,7 +291,11 @@ def run_review(
             raise ValueError(
                 "Enter a local path or GitHub URL, or upload Python files."
             )
-        cli = equivalent_cli_review(path_text, no_llm=no_llm, model=model)
+        from code_review_agent.pipeline import normalize_pipeline_tools
+
+        if tools is not None and not normalize_pipeline_tools(tools):
+            raise ValueError("Select at least one detector.")
+        cli = equivalent_cli_review(path_text, no_llm=no_llm, model=model, tools=tools)
         yield (
             f"Running… `{cli}`",
             "_Running detectors…_",
@@ -309,6 +325,7 @@ def run_review(
             no_llm=no_llm,
             extra_context=extra_context or "",
             issue_texts=issue_snippets(cloned.issues) if cloned else None,
+            tools=tools,
             on_step=on_step,
         )
         note = " · ".join(steps) if steps else "Done."
@@ -337,7 +354,7 @@ def run_review(
         note += f"  \nSaved `{saved}`"
         yield note, report_md, rows, json_text, saved, choices, md_path
     except Exception as exc:
-        cli = equivalent_cli_review(path_text, no_llm=no_llm, model=model)
+        cli = equivalent_cli_review(path_text, no_llm=no_llm, model=model, tools=tools)
         choices = stored_report_choices(output_dir)
         yield (
             f"Failed: {exc}",
@@ -385,10 +402,10 @@ def rerun_target_from_report(path: str) -> str:
 
 
 def _run_review_ui(
-    path_text, uploads, model, no_llm, extra_context, config_path
+    path_text, uploads, model, no_llm, extra_context, config_path, tools
 ) -> Iterator[tuple]:
     for chunk in run_review(
-        path_text, uploads, model, no_llm, extra_context, config_path
+        path_text, uploads, model, no_llm, extra_context, config_path, tools
     ):
         status, md, rows, js, saved, choices, selected = chunk
         yield (
@@ -496,103 +513,14 @@ def run_ask(question: str, model: str, config_path: str | None) -> str:
     return "".join(agent.ask(q))
 
 
-def _parse_pytest_terminal(text: str) -> dict:
-    tests = []
-    for line in text.splitlines():
-        line = line.strip()
-        for suffix, outcome in (
-            (" PASSED", "passed"),
-            (" FAILED", "failed"),
-            (" SKIPPED", "skipped"),
-            (" ERROR", "error"),
-        ):
-            if line.endswith(suffix):
-                tests.append(
-                    {"nodeid": line[: -len(suffix)].strip(), "outcome": outcome}
-                )
-                break
-    summary = {
-        "passed": sum(1 for t in tests if t["outcome"] == "passed"),
-        "failed": sum(1 for t in tests if t["outcome"] == "failed"),
-        "skipped": sum(1 for t in tests if t["outcome"] == "skipped"),
-        "error": sum(1 for t in tests if t["outcome"] == "error"),
-        "total": len(tests),
-    }
-    return {"tests": tests, "summary": summary}
+def _all_pipeline_tools() -> list[str]:
+    from code_review_agent.pipeline import PIPELINE_TOOL_IDS
+
+    return list(PIPELINE_TOOL_IDS)
 
 
-def run_pytest_suite(marker_filter: str, live_llm: bool) -> tuple[str, str, str]:
-    """Run pytest and return (summary_html, table_html, log)."""
-    env = os.environ.copy()
-    if live_llm:
-        env["QUALITY_TRIAGE_LIVE_LLM"] = "1"
-    else:
-        env.pop("QUALITY_TRIAGE_LIVE_LLM", None)
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "pytest",
-        str(ROOT / "tests"),
-        "-v",
-        "--tb=short",
-        "-p",
-        "no:cacheprovider",
-    ]
-    if marker_filter and marker_filter.strip() and marker_filter.lower() != "all":
-        cmd += ["-k", marker_filter.strip()]
-
-    start = time.time()
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(ROOT),
-            capture_output=True,
-            text=True,
-            timeout=600,
-            env=env,
-        )
-        log = (proc.stdout or "") + "\n" + (proc.stderr or "")
-    except subprocess.TimeoutExpired:
-        return "<p>Pytest timed out after 10 minutes.</p>", "", "timed out"
-
-    report = _parse_pytest_terminal(log)
-    summary = report["summary"]
-    duration = time.time() - start
-    passed = summary["passed"]
-    failed = summary["failed"] + summary["error"]
-    color = "#4A6B52" if failed == 0 else "#A24B2A"
-    status = "ALL TESTS PASSED" if failed == 0 else "SOME TESTS FAILED"
-    summary_html = f"""
-    <div style="font-family:'Source Sans 3',system-ui,sans-serif;color:#1F1A14">
-      <div style="font-family:Fraunces,serif;font-size:1.6rem;color:{color}">{status}</div>
-      <p style="font-family:'IBM Plex Mono',monospace;font-size:0.8rem;color:#3D4A52">
-        {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} · {duration:.1f}s
-      </p>
-      <div style="display:flex;gap:1.5rem;flex-wrap:wrap">
-        <div><strong>{summary["total"]}</strong><br/><span style="font-size:0.75rem">total</span></div>
-        <div><strong style="color:#4A6B52">{passed}</strong><br/><span style="font-size:0.75rem">passed</span></div>
-        <div><strong style="color:#A24B2A">{failed}</strong><br/><span style="font-size:0.75rem">failed</span></div>
-        <div><strong>{summary["skipped"]}</strong><br/><span style="font-size:0.75rem">skipped</span></div>
-      </div>
-    </div>
-    """
-    rows = []
-    for t in report["tests"]:
-        node = t.get("nodeid", "")
-        parts = node.split("::")
-        name = parts[-1] if parts else node
-        cls = parts[-2] if len(parts) >= 3 else "—"
-        rows.append(
-            f"<tr><td>{cls}</td><td>{name}</td><td>{t.get('outcome')}</td></tr>"
-        )
-    table_html = (
-        "<table style='width:100%;font-family:IBM Plex Mono,monospace;font-size:12px'>"
-        "<tr><th>Class</th><th>Test</th><th>Result</th></tr>"
-        + "".join(rows)
-        + "</table>"
-    )
-    return summary_html, table_html, log[-50_000:]
+def _no_pipeline_tools() -> list[str]:
+    return []
 
 
 def build_ui(config_path: str | None = None):
@@ -600,6 +528,7 @@ def build_ui(config_path: str | None = None):
 
     from code_review_agent.config import DEFAULT_LITELLM_MODEL, get_config
     from code_review_agent.dashboard import FINDINGS_HEADERS
+    from code_review_agent.pipeline import pipeline_tool_choices
 
     cfg = get_config(config_path)
     default_model = cfg.llm.model or DEFAULT_LITELLM_MODEL
@@ -616,9 +545,9 @@ def build_ui(config_path: str | None = None):
               Same pipeline as the terminal
             </h1>
             <p style="color:#3D4A52;margin:0 0 1rem">
-              Prefer the CLI: <code>code-review review ./src --no-llm --output reports/review.md</code>.
-              This window is optional. Run a review, read the rendered markdown report,
-              and reopen anything saved under <code>reports/</code> in the Results tab.
+              Tick the detectors you want, then run. The report renders as markdown
+              and is saved under <code>reports/</code>. Uncheck “Skip LiteLLM” to
+              synthesise with Ollama via LiteLLM.
             </p>
             """,
             padding=False,
@@ -628,80 +557,103 @@ def build_ui(config_path: str | None = None):
         with gr.Tabs(elem_id="qt-tabs"):
             with gr.Tab("Review", elem_id="qt-tab-review"):
                 with gr.Row():
-                    path_in = gr.Textbox(
-                        label="Local path or GitHub URL",
-                        placeholder="/path/to/project  or  https://github.com/owner/repo",
-                        info="GitHub clones pull up to 10 recent open issues for TD classification.",
-                        scale=4,
-                        elem_id="qt-path",
-                    )
-                    model_in = gr.Dropdown(
-                        label="Model",
-                        choices=alias_choices,
-                        value="local" if "local" in cfg.aliases else default_model,
-                        allow_custom_value=True,
-                        scale=2,
-                        elem_id="qt-model",
-                    )
-                uploads = gr.File(
-                    label="Or drop .py files",
-                    file_count="multiple",
-                    file_types=[".py"],
-                    type="filepath",
-                    elem_id="qt-uploads",
-                )
-                context_in = gr.Textbox(
-                    label="Focus / extra context",
-                    lines=2,
-                    elem_id="qt-context",
-                )
-                no_llm = gr.Checkbox(
-                    label="Pipeline only (skip LiteLLM) — matches --no-llm",
-                    value=True,
-                    info="On by default. Uncheck to add LiteLLM synthesis.",
-                    elem_id="qt-no-llm",
-                )
-                cli_preview = gr.Markdown(
-                    cli_preview_markdown("", "local", True),
-                    elem_id="qt-cli-preview",
-                )
-                run_btn = gr.Button(
-                    "Run review", variant="primary", elem_id="qt-run-review"
-                )
-                status_md = gr.Markdown(
-                    "Ready. Enter a path and run — the markdown report is saved to `reports/`.",
-                    elem_id="qt-status",
-                )
-                with gr.Tabs():
-                    with gr.Tab("Report"):
-                        report_md = gr.Markdown(
-                            "_No report yet. Run a review or open one in **Results**._",
-                            elem_id="qt-report-md",
-                            elem_classes=["qt-report"],
-                            line_breaks=True,
-                            height=560,
+                    with gr.Column(scale=4, min_width=300, elem_classes=["qt-setup"]):
+                        path_in = gr.Textbox(
+                            label="Project",
+                            placeholder="/path/to/project  or  https://github.com/owner/repo",
+                            info="Local folder, GitHub URL, or files below.",
+                            elem_id="qt-path",
                         )
-                    with gr.Tab("Findings"):
-                        findings_df = gr.Dataframe(
-                            headers=FINDINGS_HEADERS,
-                            label="Findings",
-                            interactive=False,
-                            wrap=True,
-                            elem_id="qt-findings",
+                        model_in = gr.Dropdown(
+                            label="LiteLLM model",
+                            choices=alias_choices,
+                            value="local" if "local" in cfg.aliases else default_model,
+                            allow_custom_value=True,
+                            info="`local` is ollama/hf.co/LiquidAI/LFM2.5-2.6B-GGUF:Q4_K_M",
+                            elem_id="qt-model",
                         )
-                    with gr.Tab("JSON"):
-                        json_out = gr.Code(language="json", label="Report JSON")
-                    with gr.Tab("Saved files"):
-                        saved_out = gr.Textbox(
-                            label="Written paths (markdown, JSON, HTML)",
-                            interactive=False,
-                            elem_id="qt-saved",
+                        tool_picks = gr.CheckboxGroup(
+                            label="Detectors to run",
+                            choices=pipeline_tool_choices(),
+                            value=_all_pipeline_tools(),
+                            info="At least one required. Default is all.",
+                            elem_id="qt-tools",
                         )
+                        with gr.Row():
+                            all_btn = gr.Button(
+                                "Select all", size="sm", elem_id="qt-tools-all"
+                            )
+                            none_btn = gr.Button(
+                                "Clear", size="sm", elem_id="qt-tools-none"
+                            )
+                        no_llm = gr.Checkbox(
+                            label="Skip LiteLLM narrative",
+                            value=True,
+                            info="On = detectors only (--no-llm). Off = synthesise with the model.",
+                            elem_id="qt-no-llm",
+                        )
+                        with gr.Accordion("More options", open=False):
+                            uploads = gr.File(
+                                label="Or drop .py files",
+                                file_count="multiple",
+                                file_types=[".py"],
+                                type="filepath",
+                                elem_id="qt-uploads",
+                            )
+                            context_in = gr.Textbox(
+                                label="Focus / extra context for synthesis",
+                                lines=2,
+                                elem_id="qt-context",
+                            )
+                        cli_preview = gr.Markdown(
+                            cli_preview_markdown(
+                                "", "local", True, _all_pipeline_tools()
+                            ),
+                            elem_id="qt-cli-preview",
+                        )
+                        run_btn = gr.Button(
+                            "Run review",
+                            variant="primary",
+                            elem_id="qt-run-review",
+                        )
+                    with gr.Column(scale=6, min_width=380):
+                        status_md = gr.Markdown(
+                            "Ready. Choose detectors, enter a path, then run.",
+                            elem_id="qt-status",
+                        )
+                        with gr.Tabs():
+                            with gr.Tab("Report"):
+                                report_md = gr.Markdown(
+                                    "_No report yet. Run a review or open one in **Results**._",
+                                    elem_id="qt-report-md",
+                                    elem_classes=["qt-report"],
+                                    line_breaks=True,
+                                    height=560,
+                                )
+                            with gr.Tab("Findings"):
+                                findings_df = gr.Dataframe(
+                                    headers=FINDINGS_HEADERS,
+                                    label="Findings",
+                                    interactive=False,
+                                    wrap=True,
+                                    row_count=8,
+                                    elem_id="qt-findings",
+                                )
+                            with gr.Tab("JSON"):
+                                json_out = gr.Code(language="json", label="Report JSON")
+                            with gr.Tab("Saved files"):
+                                saved_out = gr.Textbox(
+                                    label="Written paths (markdown, JSON, HTML)",
+                                    interactive=False,
+                                    elem_id="qt-saved",
+                                )
 
-                for _comp in (path_in, model_in, no_llm):
+                all_btn.click(fn=_all_pipeline_tools, outputs=tool_picks)
+                none_btn.click(fn=_no_pipeline_tools, outputs=tool_picks)
+                for _comp in (path_in, model_in, no_llm, tool_picks):
                     _comp.change(
                         fn=cli_preview_markdown,
-                        inputs=[path_in, model_in, no_llm],
+                        inputs=[path_in, model_in, no_llm, tool_picks],
                         outputs=cli_preview,
                     )
 
@@ -767,6 +719,7 @@ def build_ui(config_path: str | None = None):
                         no_llm,
                         context_in,
                         cfg_state,
+                        tool_picks,
                     ],
                     outputs=[
                         status_md,
@@ -782,7 +735,15 @@ def build_ui(config_path: str | None = None):
 
             run_btn.click(
                 fn=_run_review_ui,
-                inputs=[path_in, uploads, model_in, no_llm, context_in, cfg_state],
+                inputs=[
+                    path_in,
+                    uploads,
+                    model_in,
+                    no_llm,
+                    context_in,
+                    cfg_state,
+                    tool_picks,
+                ],
                 outputs=[
                     status_md,
                     report_md,
@@ -875,30 +836,6 @@ def build_ui(config_path: str | None = None):
                     fn=run_ask,
                     inputs=[question, ask_model, cfg_state],
                     outputs=[ask_out],
-                )
-
-            with gr.Tab("Pytest (dev)", elem_id="qt-tab-pytest"):
-                gr.Markdown("Same as `uv run pytest tests/ -v` in the project root.")
-                marker = gr.Textbox(
-                    label="pytest -k filter",
-                    placeholder="leave blank for the full suite",
-                    elem_id="qt-pytest-filter",
-                )
-                live = gr.Checkbox(
-                    label="QUALITY_TRIAGE_LIVE_LLM=1 (needs Ollama + LFM2.5 GGUF)",
-                    value=False,
-                    elem_id="qt-pytest-live",
-                )
-                test_btn = gr.Button(
-                    "Run pytest", variant="primary", elem_id="qt-pytest-run"
-                )
-                test_summary = gr.HTML(padding=False)
-                test_table = gr.HTML(padding=False)
-                test_log = gr.Code(language="shell", label="pytest log")
-                test_btn.click(
-                    fn=run_pytest_suite,
-                    inputs=[marker, live],
-                    outputs=[test_summary, test_table, test_log],
                 )
 
     return demo

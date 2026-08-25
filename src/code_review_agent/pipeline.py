@@ -39,6 +39,48 @@ _TODO_RE = re.compile(
     re.IGNORECASE,
 )
 
+PIPELINE_TOOL_IDS = (
+    "list-files",
+    "code-intel",
+    "python-smells",
+    "ml-smells",
+    "classify-td",
+)
+
+PIPELINE_TOOL_LABELS = {
+    "list-files": "List Python files",
+    "code-intel": "Code intelligence (AST)",
+    "python-smells": "Python smells",
+    "ml-smells": "ML smells",
+    "classify-td": "Technical debt (TODOs + GitHub issues)",
+}
+
+_TOOL_ALIASES = {
+    "list_python_files": "list-files",
+    "analyze_code_intelligence": "code-intel",
+    "detect_python_smells": "python-smells",
+    "detect_ml_smells": "ml-smells",
+    "classify_technical_debt": "classify-td",
+}
+
+
+def normalize_pipeline_tools(selected: list[str] | tuple[str, ...] | None) -> list[str]:
+    """Keep known detectors in canonical order. ``None`` means all."""
+    if selected is None:
+        return list(PIPELINE_TOOL_IDS)
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in selected:
+        key = _TOOL_ALIASES.get(str(item).strip(), str(item).strip())
+        if key in PIPELINE_TOOL_IDS and key not in seen:
+            out.append(key)
+            seen.add(key)
+    return out
+
+
+def pipeline_tool_choices() -> list[tuple[str, str]]:
+    return [(PIPELINE_TOOL_LABELS[k], k) for k in PIPELINE_TOOL_IDS]
+
 
 def extract_debt_comments(
     path: str,
@@ -113,18 +155,24 @@ def run_pipeline(
     parallel: bool = True,
     on_step: Callable[[str], None] | None = None,
     issue_texts: list[str] | None = None,
+    tools: list[str] | tuple[str, ...] | None = None,
 ) -> PipelineResult:
-    """Run the fixed analysis sequence against a local path."""
+    """Run the selected detectors against a local path. Default: all tools."""
     cfg = cfg or get_config()
     target = str(Path(path).resolve())
     ignore = set(cfg.tools.ignore_dirs)
+    selected = normalize_pipeline_tools(tools)
+    if not selected:
+        raise ValueError("Select at least one detector.")
 
     def note(msg: str) -> None:
         if on_step:
             on_step(msg)
 
-    note("Listing Python files…")
-    files_raw = list_python_files(target)
+    files_raw: dict[str, Any] = {"total_files": 0, "files": []}
+    if "list-files" in selected:
+        note("Listing Python files…")
+        files_raw = list_python_files(target)
 
     def _intel():
         return analyze_code_intelligence(target, import_graph=True)
@@ -135,42 +183,56 @@ def run_pipeline(
     def _ml():
         return detect_ml_smells(target)
 
-    note("Code intelligence, Python smells, ML smells…")
-    if parallel:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            fut_intel = pool.submit(_intel)
-            fut_py = pool.submit(_py)
-            fut_ml = pool.submit(_ml)
-            intel_raw = fut_intel.result()
-            py_raw = fut_py.result()
-            ml_raw = fut_ml.result()
-    else:
-        intel_raw = _intel()
-        py_raw = _py()
-        ml_raw = _ml()
+    jobs: list[tuple[str, Callable[[], dict[str, Any]]]] = []
+    if "code-intel" in selected:
+        jobs.append(("intel", _intel))
+    if "python-smells" in selected:
+        jobs.append(("py", _py))
+    if "ml-smells" in selected:
+        jobs.append(("ml", _ml))
 
-    note("Extracting TODO/FIXME comments…")
-    td_texts = extract_debt_comments(target, ignore)
-    extra = [t.strip() for t in (issue_texts or []) if isinstance(t, str) and t.strip()]
-    if extra:
-        note(f"Including {len(extra)} GitHub issue(s) in TD classification…")
-        td_texts = td_texts + extra
+    results: dict[str, dict[str, Any]] = {}
+    if jobs:
+        note("Running selected detectors…")
+        if parallel and len(jobs) > 1:
+            with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+                futs = {name: pool.submit(fn) for name, fn in jobs}
+                results = {name: fut.result() for name, fut in futs.items()}
+        else:
+            results = {name: fn() for name, fn in jobs}
+
+    intel_raw = results.get("intel") or {}
+    py_raw = results.get("py") or {}
+    ml_raw = results.get("ml") or {}
+
+    td_texts: list[str] = []
     td_raw: dict[str, Any] = {}
-    if td_texts:
-        note("Classifying technical debt…")
-        td_raw = classify_technical_debt(td_texts)
+    if "classify-td" in selected:
+        note("Extracting TODO/FIXME comments…")
+        td_texts = extract_debt_comments(target, ignore)
+        extra = [
+            t.strip() for t in (issue_texts or []) if isinstance(t, str) and t.strip()
+        ]
+        if extra:
+            note(f"Including {len(extra)} GitHub issue(s) in TD classification…")
+            td_texts = td_texts + extra
+        if td_texts:
+            note("Classifying technical debt…")
+            td_raw = classify_technical_debt(td_texts)
 
     files_analyzed = int(files_raw.get("total_files") or 0)
     if not files_analyzed and isinstance(intel_raw.get("summary"), dict):
         files_analyzed = int(intel_raw["summary"].get("files_analyzed") or 0)
 
-    tools_run = [
-        "list_python_files",
-        "analyze_code_intelligence",
-        "detect_python_smells",
-        "detect_ml_smells",
-    ]
-    if td_texts:
+    name_map = {
+        "list-files": "list_python_files",
+        "code-intel": "analyze_code_intelligence",
+        "python-smells": "detect_python_smells",
+        "ml-smells": "detect_ml_smells",
+        "classify-td": "classify_technical_debt",
+    }
+    tools_run = [name_map[k] for k in selected if k != "classify-td"]
+    if "classify-td" in selected and td_texts:
         tools_run.append("classify_technical_debt")
 
     intel_summary = intel_raw.get("summary") if isinstance(intel_raw, dict) else None
@@ -200,6 +262,26 @@ def run_pipeline(
     )
 
 
+_THINK_CLOSE_RE = re.compile(r"</think>", re.IGNORECASE)
+_EXEC_HEADING = "## Executive summary"
+
+
+def clean_synthesis(text: str) -> str:
+    """Drop chain-of-thought preambles from completion-only local models."""
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+    parts = _THINK_CLOSE_RE.split(raw)
+    if len(parts) > 1:
+        raw = parts[-1].strip()
+    lowered = raw.lower()
+    needle = _EXEC_HEADING.lower()
+    idx = lowered.rfind(needle)
+    if idx >= 0:
+        raw = raw[idx:].strip()
+    return raw
+
+
 def synthesize_report(
     report: ReportData,
     client: LLMClient,
@@ -211,7 +293,8 @@ def synthesize_report(
         "Synthesise the following structured code-review findings into the "
         "required report sections. Do not invent files or line numbers that "
         "are not in the JSON.\n\n"
-        f"```json\n{json.dumps(payload, default=str)}\n```"
+        f"```json\n{json.dumps(payload, default=str)}\n```\n\n"
+        "Start now with ## Executive summary"
     )
     if extra_context:
         user += f"\n\nAdditional reviewer context: {extra_context}"
@@ -221,7 +304,7 @@ def synthesize_report(
             {"role": "user", "content": user},
         ]
     )
-    return result.content
+    return clean_synthesis(result.content)
 
 
 def stream_synthesis(
@@ -262,6 +345,7 @@ def execute_hybrid_review(
     no_llm: bool = False,
     extra_context: str = "",
     issue_texts: list[str] | None = None,
+    tools: list[str] | tuple[str, ...] | None = None,
     parallel: bool = True,
     on_step: Callable[[str], None] | None = None,
 ) -> PipelineResult:
@@ -279,6 +363,7 @@ def execute_hybrid_review(
         parallel=parallel,
         on_step=on_step,
         issue_texts=issue_texts,
+        tools=tools,
     )
     result.report.model = resolve_llm_model(model=model, provider=provider, cfg=cfg)
     result.report.provider = result.report.model.split("/", 1)[0]

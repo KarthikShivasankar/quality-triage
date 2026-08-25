@@ -9,7 +9,6 @@ import urllib.request
 import pytest
 
 from code_review_agent.app import (
-    _parse_pytest_terminal,
     cli_preview_markdown,
     equivalent_cli_review,
     equivalent_cli_tool,
@@ -18,19 +17,6 @@ from code_review_agent.app import (
     run_tool,
     tool_preview_markdown,
 )
-
-
-def test_parse_pytest_terminal():
-    log = (
-        "tests/test_x.py::TestA::test_one PASSED\n"
-        "tests/test_x.py::TestA::test_two FAILED\n"
-        "tests/test_x.py::test_skip SKIPPED\n"
-    )
-    report = _parse_pytest_terminal(log)
-    assert report["summary"]["passed"] == 1
-    assert report["summary"]["failed"] == 1
-    assert report["summary"]["skipped"] == 1
-    assert report["summary"]["total"] == 3
 
 
 def test_equivalent_cli_review():
@@ -45,6 +31,12 @@ def test_equivalent_cli_review():
     assert "local" not in equivalent_cli_review("./src", model="local")
     preview = cli_preview_markdown("./src", "local", True)
     assert "`code-review review ./src --no-llm`" in preview
+    subset = equivalent_cli_review(
+        "./src", no_llm=True, tools=["ml-smells", "python-smells"]
+    )
+    assert "--tool python-smells" in subset
+    assert "--tool ml-smells" in subset
+    assert "--tool list-files" not in subset
 
 
 def test_equivalent_cli_tool():
@@ -221,5 +213,8 @@ def test_app_http_smoke():
         assert status == 200
         lowered = body.lower()
         assert "quality triage" in lowered or "gradio" in lowered
+        assert "pytest (dev)" not in lowered
+        assert "qt-tab-pytest" not in body
+        assert "qt-tab-review" in body
     finally:
         demo.close()

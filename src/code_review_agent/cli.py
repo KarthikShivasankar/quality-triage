@@ -339,6 +339,21 @@ def main(ctx, config, quiet, verbose, ci):
 )
 @click.option("--no-llm", is_flag=True, default=False, help="Skip LiteLLM synthesis")
 @click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    type=click.Choice(
+        [
+            "list-files",
+            "code-intel",
+            "python-smells",
+            "ml-smells",
+            "classify-td",
+        ]
+    ),
+    help="Detector to run (repeatable; default: all)",
+)
+@click.option(
     "--agentic", is_flag=True, default=False, help="LLM-orchestrated tool loop (legacy)"
 )
 @click.pass_context
@@ -355,6 +370,7 @@ def review(
     fail_on,
     keep_clone,
     no_llm,
+    tools,
     agentic,
 ):
     """Full code review on a local PATH or GitHub URL.
@@ -420,6 +436,7 @@ def review(
             no_llm=no_llm,
             extra_context=context,
             issue_texts=issue_snippets(cloned.issues) if cloned else None,
+            tools=list(tools) or None,
             on_step=None if quiet else (lambda msg: console.print(f"[dim]{msg}[/dim]")),
         )
         if result.synthesis_error:
