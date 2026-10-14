@@ -276,3 +276,19 @@ def test_ml_smells_dict_container():
     }
     data = build_report(target="/proj", provider="ollama", model="x", ml_raw=raw)
     assert any(f.category == "magic_number" for f in data.findings)
+
+
+def test_ml_smells_smell_key_keeps_category_and_message():
+    raw = {
+        "general_ml_smells": [
+            {
+                "file": "/proj/a.py",
+                "smells": [
+                    {"smell": "Magic number detected: 500", "line_number": 16},
+                ],
+            }
+        ],
+    }
+    data = build_report(target="/proj", provider="ollama", model="x", ml_raw=raw)
+    assert data.findings[0].category == "Magic number detected"
+    assert data.findings[0].message == "Magic number detected: 500"

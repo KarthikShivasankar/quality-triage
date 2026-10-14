@@ -222,7 +222,9 @@ class FindingNormalizer:
     ):
         if not isinstance(smell, dict):
             return
-        name = smell.get("name", "Unknown")
+        # general/HF detectors emit {"smell": "Magic number detected: 500"}, not "name"
+        text = smell.get("name") or smell.get("smell") or "Unknown"
+        name = text.split(":", 1)[0].strip() or "Unknown"
         fp = smell.get("file_path") or file_abs
         line = int(smell.get("line_number", 0) or 0)
         sev_key = name.lower().replace(" ", "_")
@@ -238,7 +240,7 @@ class FindingNormalizer:
                 line=line,
                 col=None,
                 symbol=None,
-                message=smell.get("description", smell.get("name", "")),
+                message=smell.get("description") or text,
                 how_to_fix=smell.get("how_to_fix"),
                 code_snippet=smell.get("code_snippet"),
                 framework=smell.get("framework"),
