@@ -7,7 +7,7 @@ name = "code-review-agent"
 version = "0.2.0"
 description = "AI-powered code review CLI: deterministic smell detection plus LiteLLM synthesis across local and frontier models"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "litellm>=1.90.0",
     "click>=8.1",
@@ -67,7 +67,7 @@ show_missing = true
 
 [tool.ruff]
 line-length = 88
-target-version = "py310"
+target-version = "py311"
 src = ["src", "tests"]
 
 [tool.ruff.lint]

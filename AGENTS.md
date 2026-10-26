@@ -13,7 +13,7 @@ The **CLI is the product**. Gradio (`code-review app`) is an optional companion 
 
 ## Bootstrap
 
-Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync

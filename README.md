@@ -8,7 +8,7 @@ Agent contract: [`AGENTS.md`](AGENTS.md)
 
 ## Requirements
 
-- Python **≥ 3.10**
+- Python **≥ 3.11**
 - [`uv`](https://docs.astral.sh/uv/)
 - Optional: [Ollama](https://ollama.com) (default local backend) or API keys for OpenAI / Anthropic / Groq / Gemini / Azure
 
