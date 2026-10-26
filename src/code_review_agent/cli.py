@@ -570,6 +570,13 @@ def analyze_file(
 @click.option("--max-attempts", default=3, show_default=True, type=int)
 @click.option("--max-unit-lines", default=120, show_default=True, type=int)
 @click.option(
+    "--max-tokens",
+    default=None,
+    type=int,
+    help="Completion budget per call (reasoning models need 16k+)",
+)
+@click.option("--timeout", default=None, type=int, help="Seconds per LLM call")
+@click.option(
     "--apply",
     is_flag=True,
     default=False,
@@ -595,6 +602,8 @@ def refactor(
     max_targets,
     max_attempts,
     max_unit_lines,
+    max_tokens,
+    timeout,
     apply,
     output,
 ):
@@ -623,6 +632,8 @@ def refactor(
     cfg = _load_cfg(ctx.obj.get("config_path"))
     quiet = ctx.obj.get("quiet")
     resolved = resolve_llm_model(model=model, provider=None, cfg=cfg)
+    cfg.llm.max_tokens = max_tokens or cfg.llm.max_tokens
+    cfg.llm.timeout = timeout or cfg.llm.timeout
     client = LLMClient(cfg.llm, model=resolved, api_base=api_base)
     harness = Harness(
         root=Path(path),
@@ -647,10 +658,19 @@ def refactor(
     )[:max_targets]
     console.print(f"[cyan]{len(targets)} target(s), model {resolved}[/cyan]")
 
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    patch = out.with_suffix(".diff")
     outcomes = []
     # bottom-up per file, so an applied rewrite never shifts a later target
     for t in sorted(targets, key=lambda t: (t.unit.file, -t.unit.start)):
         outcomes.append(harness.refactor(t, apply=apply))
+        # saved after every target: an interrupted run keeps what it finished
+        out.write_text(
+            json.dumps([o.to_dict() for o in outcomes], indent=1, default=str),
+            encoding="utf-8",
+        )
+        patch.write_text("".join(o.diff for o in outcomes), encoding="utf-8")
 
     table = Table(title="Refactoring outcomes")
     for col in ("Location", "Finding", "Status", "Attempts"):
@@ -666,14 +686,6 @@ def refactor(
         )
     console.print(table)
 
-    out = Path(output)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps([o.to_dict() for o in outcomes], indent=1, default=str),
-        encoding="utf-8",
-    )
-    patch = out.with_suffix(".diff")
-    patch.write_text("".join(o.diff for o in outcomes), encoding="utf-8")
     accepted = sum(o.status == "accepted" for o in outcomes)
     console.print(
         f"[green]{accepted}/{len(outcomes)} accepted[/green] "

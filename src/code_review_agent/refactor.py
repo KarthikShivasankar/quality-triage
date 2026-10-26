@@ -338,6 +338,7 @@ def _statements_per_line(code: str) -> int:
 
 
 def _imported_names(source: str) -> set[str]:
+    """Imported names plus module-level classes and functions (alias targets)."""
     names: set[str] = set()
     try:
         tree = ast.parse(source)
@@ -348,6 +349,11 @@ def _imported_names(source: str) -> set[str]:
             names |= {(a.asname or a.name).split(".")[0] for a in node.names}
         elif isinstance(node, ast.ImportFrom):
             names |= {a.asname or a.name for a in node.names}
+    names |= {
+        n.name
+        for n in tree.body
+        if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     return names
 
 

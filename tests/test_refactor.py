@@ -143,6 +143,9 @@ def test_gaming_flags():
         "suppression_comment",
     ]
     assert gaming_flags(NESTED, FLAT, src) == []
+    local = "class Value:\n    pass\n\n" + NESTED
+    alias_local = "def nested(a, b):\n    V = Value\n    return V(a)\n"
+    assert gaming_flags(NESTED, alias_local, local) == ["import_alias"]
 
 
 def test_repetition_ratio():
