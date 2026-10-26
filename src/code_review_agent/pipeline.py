@@ -10,16 +10,17 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from code_review_agent.config import AppConfig, get_config
 from code_review_agent.filters import split_smell_families
-from code_review_agent.llm import LLMClient
+from code_review_agent.llm import LLMClient, LLMError
 from code_review_agent.prompts import SYNTHESIS_PROMPT
 from code_review_agent.reporter import (
+    SEVERITY_ORDER,
     ReportData,
     build_report,
     compute_health_score,
@@ -106,9 +107,37 @@ def extract_debt_comments(
     return texts
 
 
+def select_for_synthesis(findings: list, max_findings: int = 80) -> tuple[list, dict]:
+    """Most severe first, then round-robin across files, so the cap never keeps
+    only the first few files of the report. Returns (chosen, omitted summary)."""
+    from collections import Counter, defaultdict
+
+    rank = {s: i for i, s in enumerate(SEVERITY_ORDER)}
+    ordered = sorted(findings, key=lambda f: rank.get(f.severity.value, 9))
+    by_file: dict[str, list] = defaultdict(list)
+    for f in ordered:
+        by_file[f.file].append(f)
+    chosen: list = []
+    for sev in SEVERITY_ORDER:
+        queues = [[f for f in fs if f.severity.value == sev] for fs in by_file.values()]
+        while len(chosen) < max_findings and any(queues):
+            for q in queues:
+                if q and len(chosen) < max_findings:
+                    chosen.append(q.pop(0))
+    picked = {id(f) for f in chosen}
+    rest = [f for f in findings if id(f) not in picked]
+    omitted = {
+        "count": len(rest),
+        "by_category": dict(Counter(f.category for f in rest).most_common(15)),
+        "by_severity": dict(Counter(f.severity.value for f in rest)),
+    }
+    return chosen, omitted
+
+
 def _compact_report_payload(data: ReportData, max_findings: int = 80) -> dict[str, Any]:
+    chosen, omitted = select_for_synthesis(data.findings, max_findings)
     findings = []
-    for f in data.findings[:max_findings]:
+    for f in chosen:
         findings.append(
             {
                 "id": f.finding_id,
@@ -131,11 +160,31 @@ def _compact_report_payload(data: ReportData, max_findings: int = 80) -> dict[st
         "health_score": compute_health_score(data.findings),
         "severity_counts": count_by_severity(data.findings),
         "findings": findings,
+        "omitted_findings": omitted,
         "td_predictions": data.td_predictions[:40],
         "intel_summary": {
             k: v for k, v in (data.intel_summary or {}).items() if k != "large_files"
         },
     }
+
+
+_ID_RE = re.compile(r"\b(?:PY(?:CS|AS|SS)|ML(?:FW|HF|GN))-\d{3,}\b")
+_LOC_RE = re.compile(r"([\w./\\-]+\.py):(\d+)")
+
+
+def check_citations(narrative: str, findings: list) -> list[str]:
+    """Citations in the narrative that match no finding: unknown ids, or a
+    `file:line` that no finding has. An empty list means fully grounded."""
+    ids = {f.finding_id for f in findings}
+    locs = {(f.file.replace("\\", "/"), f.line) for f in findings}
+    files = {f.file.replace("\\", "/") for f in findings}
+    bad = [i for i in dict.fromkeys(_ID_RE.findall(narrative or "")) if i not in ids]
+    for path, line in dict.fromkeys(_LOC_RE.findall(narrative or "")):
+        path = path.replace("\\", "/")
+        cand = [p for p in files if p == path or p.endswith("/" + path)]
+        if not any((p, int(line)) in locs for p in cand):
+            bad.append(f"{path}:{line}")
+    return bad
 
 
 @dataclass
@@ -147,6 +196,7 @@ class PipelineResult:
     intel_raw: dict[str, Any]
     files_raw: dict[str, Any]
     synthesis_error: str | None = None
+    citation_issues: list[str] = field(default_factory=list)
 
 
 def run_pipeline(
@@ -305,13 +355,20 @@ def synthesize_report(
     )
     if extra_context:
         user += f"\n\nAdditional reviewer context: {extra_context}"
-    result = client.complete_text(
-        [
-            {"role": "system", "content": SYNTHESIS_PROMPT},
-            {"role": "user", "content": user},
-        ]
+    messages = [
+        {"role": "system", "content": SYNTHESIS_PROMPT},
+        {"role": "user", "content": user},
+    ]
+    # An empty answer (e.g. a reasoning model that spent its budget thinking)
+    # must not look like a clean report: retry once, then fail loudly.
+    for _ in range(2):
+        result = client.complete_text(messages)
+        text = clean_synthesis(result.content)
+        if text:
+            return text
+    raise LLMError(
+        f"empty answer from the model (finish_reason={result.finish_reason})"
     )
-    return clean_synthesis(result.content)
 
 
 def stream_synthesis(
@@ -390,7 +447,7 @@ def execute_hybrid_review(
             fallbacks=fallbacks,
         )
         try:
-            result.report.narrative = synthesize_report(
+            narrative = synthesize_report(
                 result.report,
                 client,
                 extra_context=extra_context,
@@ -398,6 +455,15 @@ def execute_hybrid_review(
         except Exception as exc:
             result.synthesis_error = str(exc)
             result.report.narrative = None
+        else:
+            result.citation_issues = check_citations(narrative, result.report.findings)
+            if result.citation_issues:
+                shown = ", ".join(f"`{c}`" for c in result.citation_issues[:10])
+                narrative += (
+                    f"\n\n> **Grounding check:** {len(result.citation_issues)} "
+                    f"citation(s) match no detector finding: {shown}"
+                )
+            result.report.narrative = narrative
 
     stamp_duration(result.report, started)
     note("Done.")

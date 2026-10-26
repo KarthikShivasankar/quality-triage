@@ -307,3 +307,72 @@ def test_execute_hybrid_review_forwards_issue_texts(tmp_path, monkeypatch):
         issue_texts=["#1 opened recently"],
     )
     assert captured["texts"] == ["#1 opened recently"]
+
+
+def _finding(fid, file, line, sev="medium", cat="Long Method"):
+    from code_review_agent.reporter import Finding, Severity
+
+    return Finding(
+        finding_id=fid,
+        tool="python_smells",
+        category=cat,
+        severity=Severity(sev),
+        file=file,
+        file_abs="/p/" + file,
+        line=line,
+        col=None,
+    )
+
+
+def test_select_for_synthesis_spreads_across_files():
+    from code_review_agent.pipeline import select_for_synthesis
+
+    findings = [_finding(f"PYCS-{i:03d}", "a.py", i) for i in range(1, 10)]
+    findings += [
+        _finding("PYCS-100", "b.py", 3),
+        _finding("PYCS-101", "c.py", 4, "high"),
+    ]
+    chosen, omitted = select_for_synthesis(findings, max_findings=3)
+    assert [f.finding_id for f in chosen] == ["PYCS-101", "PYCS-001", "PYCS-100"]
+    assert omitted["count"] == 8 and omitted["by_category"] == {"Long Method": 8}
+
+
+def test_check_citations():
+    from code_review_agent.pipeline import check_citations
+
+    findings = [_finding("PYCS-001", "pkg/a.py", 10)]
+    ok = "- [PYCS-001] pkg/a.py:10 long method"
+    assert check_citations(ok, findings) == []
+    assert check_citations("- [PYCS-001] a.py:10", findings) == []
+    bad = "- [PYCS-002] pkg/a.py:11 and other.py:3"
+    assert check_citations(bad, findings) == ["PYCS-002", "pkg/a.py:11", "other.py:3"]
+
+
+def test_synthesize_report_empty_answer_is_an_error():
+    import pytest
+
+    from code_review_agent.llm import LLMError
+
+    calls = []
+
+    class Fake(LLMClient):
+        def complete_text(self, messages, tools=None):
+            calls.append(1)
+            return CompletionResult(content="", finish_reason="length")
+
+    data = build_report(target="/proj", provider="ollama", model="x")
+    with pytest.raises(LLMError, match="empty answer"):
+        synthesize_report(data, Fake(LLMConfig()))
+    assert len(calls) == 2
+
+
+def test_hybrid_review_flags_ungrounded_citations(tmp_path, monkeypatch):
+    _sample(tmp_path)
+    cfg = load_config(None)
+    monkeypatch.setattr(
+        "code_review_agent.pipeline.synthesize_report",
+        lambda *a, **k: "## Executive summary\n- [PYCS-999] nowhere.py:1",
+    )
+    result = execute_hybrid_review(str(tmp_path), cfg, no_llm=False, parallel=False)
+    assert "PYCS-999" in result.citation_issues
+    assert "Grounding check" in result.report.narrative

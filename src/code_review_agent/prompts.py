@@ -92,7 +92,7 @@ Write compact Markdown with these headings only:
 One short paragraph. Repeat the JSON `health_score` (0-100) if present.
 
 ## Top priorities
-Up to 3 bullets with `file:line` citations from the JSON only.
+Up to 3 bullets, each citing a finding as `[id] file:line` copied from the JSON.
 
 ## Watchouts
 ML / architecture / complexity in at most 5 bullets. Write "none detected" if empty.
@@ -104,6 +104,8 @@ ML / architecture / complexity in at most 5 bullets. Write "none detected" if em
 
 Rules:
 - Never invent files, line numbers, or tools that are not in the JSON
+- Every `[id]` and `file:line` you write is checked against the JSON
+- `omitted_findings` summarises findings left out of the list; mention them, do not invent their locations
 - If findings is empty, say what was checked and residual risk
 - State confidence limits when the JSON includes tool errors
 """
