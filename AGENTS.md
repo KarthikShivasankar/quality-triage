@@ -53,6 +53,7 @@ code-review review <target> --model openai/my-model --api-base http://127.0.0.1:
 code-review review <target> --agentic
 code-review ask "<question>"
 code-review analyze-file <file.py>
+code-review refactor <path> --test-cmd "python -m pytest -q" [--apply]
 code-review run-tool ml-smells <path>
 code-review run-tool python-smells <path> --type all
 code-review run-tool classify-td --text "TODO: ..."
@@ -113,6 +114,15 @@ Then run full `review` only if hotspots appear.
 code-review analyze-file <file.py> --output reports/file-review.md
 code-review run-tool code-intel <file.py> --symbol <Name>
 ```
+
+### Remove smells (verified refactoring)
+
+```bash
+code-review refactor <src> --model <model> --test-cmd "python -m pytest -q" --test-cwd <repo root, relative to src>
+code-review refactor <src> --category "Long Method" --max-targets 5 --apply
+```
+
+Without `--apply` nothing changes on disk; read `reports/refactor.json` and `reports/refactor.diff`. A rewrite is kept only if it compiles, keeps the unit's interface, removes the targeted rule without adding others, adds no detector-gaming pattern and leaves the test command's result unchanged. `declined` means the model judged the finding a false positive or not fixable inside the unit. Always give `--test-cmd` when the project has tests.
 
 ### Technical debt
 

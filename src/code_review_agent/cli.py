@@ -5,6 +5,7 @@ Commands:
   review PATH|URL          Hybrid review (pipeline + LiteLLM synthesis)
   ask QUESTION             Ask the agent a question
   analyze-file FILE        Deep-dive on a single file
+  refactor PATH            Verified LLM refactoring of detector findings
   run-tool TOOL [opts]     On-demand tool execution
   interactive PATH         Interactive tool selector
   show-config              Print resolved configuration
@@ -541,6 +542,143 @@ def analyze_file(
 # ---------------------------------------------------------------------------
 # run-tool  (on-demand tool execution)
 # ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.argument("path", type=click.Path(exists=True, file_okay=False))
+@click.option("--model", "-m", default=None, help="LiteLLM model or alias")
+@click.option("--api-base", default=None, help="Custom OpenAI-compatible server")
+@click.option(
+    "--test-cmd",
+    default=None,
+    help="Behaviour check run after each rewrite, e.g. 'python -m pytest -q'",
+)
+@click.option(
+    "--test-cwd", default=".", help="Working dir for --test-cmd, relative to PATH"
+)
+@click.option(
+    "--tool",
+    "tools",
+    multiple=True,
+    type=click.Choice(["python-smells", "ml-smells"]),
+    help="Detectors that pick and judge targets (repeatable; default both)",
+)
+@click.option(
+    "--category", default=None, help="Only target categories matching this regex"
+)
+@click.option("--max-targets", default=10, show_default=True, type=int)
+@click.option("--max-attempts", default=3, show_default=True, type=int)
+@click.option("--max-unit-lines", default=120, show_default=True, type=int)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Keep accepted rewrites in place (default: write patches only)",
+)
+@click.option(
+    "--output",
+    "-o",
+    default="reports/refactor.json",
+    show_default=True,
+    help="JSON record of every attempt; the combined patch goes next to it",
+)
+@click.pass_context
+def refactor(
+    ctx,
+    path,
+    model,
+    api_base,
+    test_cmd,
+    test_cwd,
+    tools,
+    category,
+    max_targets,
+    max_attempts,
+    max_unit_lines,
+    apply,
+    output,
+):
+    """Remove detector findings with verified LLM rewrites.
+
+    Each rewrite must keep the unit's interface, make the targeted rule fire
+    less often without adding new findings, avoid detector-gaming patterns and
+    pass --test-cmd as before. Failures are fed back to the model; it may
+    decline false positives.
+
+    \b
+    Examples:
+      code-review refactor ./src --test-cmd "python -m pytest -q" --test-cwd ..
+      code-review refactor ./src --category "Long Method|Complex" --apply
+    """
+    import re
+
+    from code_review_agent.llm import LLMClient, resolve_llm_model
+    from code_review_agent.refactor import (
+        CheckCommand,
+        Harness,
+        default_detect,
+        select_targets,
+    )
+
+    cfg = _load_cfg(ctx.obj.get("config_path"))
+    quiet = ctx.obj.get("quiet")
+    resolved = resolve_llm_model(model=model, provider=None, cfg=cfg)
+    client = LLMClient(cfg.llm, model=resolved, api_base=api_base)
+    harness = Harness(
+        root=Path(path),
+        client=client,
+        detect=default_detect(tuple(tools) or ("python-smells", "ml-smells")),
+        test=CheckCommand.parse(test_cmd, cwd=test_cwd) if test_cmd else None,
+        max_attempts=max_attempts,
+        on_step=None if quiet else (lambda msg: console.print(f"[dim]{msg}[/dim]")),
+    )
+    harness.prepare()
+    base = harness.baseline_behaviour
+    if base is not None and base["rc"] != 0:
+        console.print(
+            f"[yellow]Behaviour check fails on the original code (rc={base['rc']}); "
+            "rewrites must reproduce the same result.[/yellow]"
+        )
+    targets = select_targets(
+        harness.baseline_findings or [],
+        path,
+        max_unit_lines=max_unit_lines,
+        include=re.compile(category, re.I) if category else None,
+    )[:max_targets]
+    console.print(f"[cyan]{len(targets)} target(s), model {resolved}[/cyan]")
+
+    outcomes = []
+    # bottom-up per file, so an applied rewrite never shifts a later target
+    for t in sorted(targets, key=lambda t: (t.unit.file, -t.unit.start)):
+        outcomes.append(harness.refactor(t, apply=apply))
+
+    table = Table(title="Refactoring outcomes")
+    for col in ("Location", "Finding", "Status", "Attempts"):
+        table.add_column(col)
+    for o in outcomes:
+        u = o.target.unit
+        colour = {"accepted": "green", "declined": "yellow"}.get(o.status, "red")
+        table.add_row(
+            f"{u.file}:{u.start} {u.name}",
+            o.target.category,
+            f"[{colour}]{o.status}[/{colour}]",
+            str(len(o.attempts)),
+        )
+    console.print(table)
+
+    out = Path(output)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(
+        json.dumps([o.to_dict() for o in outcomes], indent=1, default=str),
+        encoding="utf-8",
+    )
+    patch = out.with_suffix(".diff")
+    patch.write_text("".join(o.diff for o in outcomes), encoding="utf-8")
+    accepted = sum(o.status == "accepted" for o in outcomes)
+    console.print(
+        f"[green]{accepted}/{len(outcomes)} accepted[/green] "
+        f"({'applied in place' if apply else f'patch: {patch}'}); record: {out}"
+    )
 
 
 @main.group("run-tool")

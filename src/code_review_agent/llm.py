@@ -8,6 +8,7 @@ Talks to local models (Ollama, vLLM, LM Studio) and frontier APIs
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Iterator
 
@@ -60,6 +61,8 @@ class CompletionResult:
     tool_calls: list[ToolCall] = field(default_factory=list)
     model: str = ""
     finish_reason: str | None = None
+    reasoning: str = ""  # separated thinking text (vLLM/Ollama reasoning parsers)
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
 def resolve_model(
@@ -200,6 +203,14 @@ class LLMClient:
             kwargs["api_base"] = self.api_base
         if self.api_key:
             kwargs["api_key"] = self.api_key
+        elif (
+            self.api_base
+            and self.model.startswith("openai/")
+            and not os.environ.get("OPENAI_API_KEY")
+        ):
+            # Local OpenAI-compatible servers (vLLM, LM Studio) need no key,
+            # but the OpenAI client refuses to start without one.
+            kwargs["api_key"] = "EMPTY"
         if self.fallbacks:
             kwargs["fallbacks"] = self.fallbacks
         if tools:
@@ -244,11 +255,21 @@ class LLMClient:
         if model is None and isinstance(resp, dict):
             model = resp.get("model")
         model = model or self.model
+        reasoning = getattr(message, "reasoning_content", None)
+        if reasoning is None and isinstance(message, dict):
+            reasoning = message.get("reasoning_content")
+        usage = getattr(resp, "usage", None)
+        if usage is None and isinstance(resp, dict):
+            usage = resp.get("usage")
+        if usage is not None and not isinstance(usage, dict):
+            usage = usage.model_dump() if hasattr(usage, "model_dump") else {}
         return CompletionResult(
             content=content or "",
             tool_calls=_parse_tool_calls(message),
             model=str(model),
             finish_reason=str(finish) if finish else None,
+            reasoning=reasoning if isinstance(reasoning, str) else "",
+            usage=usage or {},
         )
 
     def stream_text(

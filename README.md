@@ -79,6 +79,30 @@ Default path is **hybrid**:
 
 `--agentic` restores the older LLM-orchestrated tool loop. Prefer hybrid or `--no-llm` for CI and tests.
 
+The narrative is checked against the findings: every `[id]` and `file:line` it cites must match a detector finding, otherwise the report ends with a **Grounding check** note listing the unmatched citations. An empty model answer is retried once and then reported as a synthesis failure, never as a clean report. When there are more findings than fit in the prompt (80), the most severe are kept, spread across files, and the rest are summarised by category.
+
+## Refactoring
+
+`refactor` removes detector findings with LLM rewrites that are verified before they are kept:
+
+```bash
+# Patches only (nothing changes on disk); the test command is the behaviour check
+code-review refactor ./src --model openai/my-model --api-base http://127.0.0.1:8000/v1 \
+  --test-cmd "python -m pytest -q" --test-cwd ..
+
+# Keep accepted rewrites in place, only for some rules
+code-review refactor ./src --category "Long Method|Cyclomatic" --apply
+```
+
+For each finding inside a function or class (at most `--max-unit-lines`, module-level and cross-module findings are skipped), the model rewrites that unit and the rewrite must:
+
+1. compile and keep the unit's name, parameters, defaults, decorators and public methods;
+2. make the targeted rule fire less often in the unit, with no other rule firing more;
+3. add none of the patterns that satisfy a detector without fixing the design: aliasing imported names, suppression comments (`noqa`, `mlscent: ignore`, …), packing statements with `;`, strings built from `chr()`, statements that only touch a name;
+4. leave `--test-cmd` with the same exit code, no fewer passes and no more failures.
+
+Failed checks go back to the model, up to `--max-attempts` times. The model may answer `NO_CHANGE: <reason>` for a false positive or a finding that cannot be fixed inside the unit; that is reported as *declined*. Every attempt is recorded in `--output` (JSON), and accepted rewrites are written as one unified diff next to it.
+
 ## Configuration
 
 All settings live in `config.yaml`. Inspect with `code-review show-config`.
@@ -136,6 +160,7 @@ code-review [--config PATH] [--ci] [-q|-v] COMMAND [OPTIONS]
 | `review TARGET` | Hybrid review of a local path or GitHub URL |
 | `ask QUESTION` | Agentic Q&A with tools |
 | `analyze-file FILE` | Pipeline scoped to one Python file |
+| `refactor PATH` | Verified LLM refactoring of detector findings |
 | `run-tool ml-smells PATH` | ML anti-patterns |
 | `run-tool python-smells PATH` | Code / architectural / structural smells |
 | `run-tool classify-td --text TEXT` | Technical debt categories |
