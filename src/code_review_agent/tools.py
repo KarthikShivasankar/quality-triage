@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import traceback
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,11 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+# PyExamine and MLScent swap sys.stdout/sys.stderr with contextlib.redirect_*,
+# which is process-global: two detector calls in different threads can leave
+# sys.stdout pointing at a closed stream. Serialise every detector call.
+DETECTOR_LOCK = threading.Lock()
 
 
 def _rel(abs_path: str, root: str) -> str:
@@ -53,16 +59,6 @@ def _get_cfg():
     return get_config()
 
 
-def _smell_to_dict(obj: Any) -> dict:
-    """Convert a smell dataclass/object to a plain dict."""
-    if isinstance(obj, dict):
-        return obj
-    try:
-        return obj.__dict__
-    except Exception:
-        return {"raw": str(obj)}
-
-
 # ---------------------------------------------------------------------------
 # Tool 1: detect_ml_smells
 # ---------------------------------------------------------------------------
@@ -73,13 +69,9 @@ def detect_ml_smells(
     ignore_dirs: list[str] | None = None,
     families: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Detect ML-specific code smells using ml_code_smell_detector."""
+    """Detect ML-specific code smells with MLScent's machine API (stable rule ids)."""
     try:
-        from ml_code_smell_detector import (
-            FrameworkSpecificSmellDetector,
-            HuggingFaceSmellDetector,
-            ML_SmellDetector,
-        )
+        from ml_code_smell_detector import analyze_file
     except ImportError as e:
         return {"error": f"ml_code_smell_detector not available: {e}"}
 
@@ -93,68 +85,51 @@ def detect_ml_smells(
     if not py_files:
         return {"error": "No Python files found", "path": str(target)}
 
+    keys = {
+        "framework": "framework_smells",
+        "huggingface": "huggingface_smells",
+        "general": "general_ml_smells",
+    }
+    selected = {f.strip() for f in (families or []) if f.strip()} or set(keys)
     results: dict[str, Any] = {
         "tool": "ml_smells",
         "target": str(target),
-        "framework_smells": [],
-        "huggingface_smells": [],
-        "general_ml_smells": [],
+        **{key: [] for key in keys.values()},
         "errors": [],
     }
 
-    detectors = [
-        (FrameworkSpecificSmellDetector, "framework_smells", "framework"),
-        (HuggingFaceSmellDetector, "huggingface_smells", "huggingface"),
-        (ML_SmellDetector, "general_ml_smells", "general"),
-    ]
-    selected = {f.strip() for f in (families or []) if f.strip()} or {
-        "framework",
-        "huggingface",
-        "general",
-    }
-
-    for DetectorCls, key, family in detectors:
-        if family not in selected:
+    for py_file in py_files:
+        file_str = str(py_file)
+        try:
+            with DETECTOR_LOCK:
+                res = analyze_file(file_str)
+        except Exception as exc:
+            results["errors"].append({"file": file_str, "error": str(exc)})
             continue
-        detector = DetectorCls()
-        for py_file in py_files:
-            file_str = str(py_file)
-            try:
-                raw = detector.detect_smells(file_str)
-                if raw:
-                    # raw may be list[dict] or dict
-                    if isinstance(raw, list):
-                        smell_list = [_smell_to_dict(s) for s in raw]
-                    elif isinstance(raw, dict):
-                        smell_list = list(raw.values()) if raw else []
-                    else:
-                        smell_list = []
+        results["errors"] += [{"file": file_str, "error": e} for e in res["errors"]]
+        grouped: dict[str, list[dict]] = {}
+        for f in res["findings"]:
+            if f["detector"] not in selected:
+                continue
+            smell = {
+                "name": f["name"],
+                "rule_id": f["rule_id"],
+                "framework": f["framework"],
+                "description": f["message"],
+                "line_number": f["line"],
+                "code_snippet": f["snippet"],
+                "how_to_fix": f["how_to_fix"],
+                "benefits": f["benefits"] or "",
+            }
+            if f["line"] and f["snippet"]:
+                col = _enrich_column(file_str, f["line"], f["snippet"])
+                if col:
+                    smell["col"] = col
+            grouped.setdefault(keys[f["detector"]], []).append(smell)
+        for key, smells in grouped.items():
+            results[key].append({"file": file_str, "smells": smells})
 
-                    # Enrich column info where missing
-                    for smell in smell_list:
-                        if (
-                            isinstance(smell, dict)
-                            and smell.get("line_number")
-                            and not smell.get("col")
-                        ):
-                            snippet = smell.get("code_snippet", "")
-                            if snippet:
-                                col = _enrich_column(
-                                    file_str, smell["line_number"], snippet
-                                )
-                                if col:
-                                    smell["col"] = col
-
-                    if smell_list:
-                        results[key].append({"file": file_str, "smells": smell_list})
-            except Exception as exc:
-                results["errors"].append({"file": file_str, "error": str(exc)})
-
-    total_smells = sum(
-        len(e["smells"])
-        for key in ("framework_smells", "huggingface_smells", "general_ml_smells")
-        for e in results[key]
-    )
+    total_smells = sum(len(e["smells"]) for key in keys.values() for e in results[key])
     results["summary"] = {
         "files_analyzed": len(py_files),
         "total_smells": total_smells,
@@ -169,6 +144,29 @@ def detect_ml_smells(
 # Tool 2: detect_python_smells
 # ---------------------------------------------------------------------------
 
+_PY_TYPES = {
+    "code": ("Code", "code_smells"),
+    "architectural": ("Architectural", "architectural_smells"),
+    "structural": ("Structural", "structural_smells"),
+}
+
+
+def _pyexamine_config(cfg: Any) -> dict[str, Any]:
+    """PyExamine's bundled thresholds with this project's config.yaml values on top."""
+    import importlib.resources
+
+    import yaml
+
+    bundled = (
+        importlib.resources.files("code_quality_analyzer") / "code_quality_config.yaml"
+    )
+    merged = yaml.safe_load(bundled.read_text(encoding="utf-8")) or {}
+    for section in ("code_smells", "architectural_smells", "structural_smells"):
+        ours = cfg._raw.get(section)
+        if isinstance(ours, dict):
+            merged.setdefault(section, {}).update(ours)
+    return merged
+
 
 def detect_python_smells(
     path: str,
@@ -177,13 +175,9 @@ def detect_python_smells(
     ignore_dirs: list[str] | None = None,
     config_path: str | None = None,
 ) -> dict[str, Any]:
-    """Detect code, architectural, and structural smells using code_quality_analyzer."""
+    """Detect code, architectural, and structural smells with PyExamine's analyze()."""
     try:
-        from code_quality_analyzer import (
-            ArchitecturalSmellDetector,
-            CodeSmellDetector,
-            StructuralSmellDetector,
-        )
+        from code_quality_analyzer import analyze
     except ImportError as e:
         return {"error": f"code_quality_analyzer not available: {e}"}
 
@@ -191,21 +185,21 @@ def detect_python_smells(
     if not target.exists():
         return {"error": f"Path does not exist: {path}"}
 
-    from code_review_agent.config import get_config, get_thresholds
+    import tempfile
+
+    import yaml
+
+    from code_review_agent.config import get_config
 
     cfg = get_config(config_path) if config_path else _get_cfg()
-    ignore = ignore_dirs or cfg.tools.ignore_dirs
-    code_thresh = dict(get_thresholds(cfg, "code_smells"))
-    for key, default in (
-        ("LARGE_COMMENT_BLOCKS", 2),
-        ("DIVERGENT_CHANGE_METHODS", 6),
-        ("SHOTGUN_SURGERY_CONTEXTS", 3),
-        ("LAZY_CLASS_LINES", 20),
-        ("DATA_CLASS_METHODS", 4),
-    ):
-        code_thresh.setdefault(key, default)
-    arch_thresh = get_thresholds(cfg, "architectural_smells")
-    struct_thresh = get_thresholds(cfg, "structural_smells")
+    ignore = list(ignore_dirs or cfg.tools.ignore_dirs)
+
+    if analysis_types:
+        types = [t for t in _PY_TYPES if t in analysis_types]
+    else:
+        types = list(_PY_TYPES) if analysis_type == "all" else [analysis_type]
+    if target.is_file():
+        types = [t for t in types if t != "architectural"]  # needs a project
 
     results: dict[str, Any] = {
         "tool": "python_smells",
@@ -214,99 +208,28 @@ def detect_python_smells(
         "analysis_types": analysis_types,
         "errors": [],
     }
+    if not types:
+        return results
 
-    if analysis_types:
-        run_code = "code" in analysis_types
-        run_arch = "architectural" in analysis_types
-        run_struct = "structural" in analysis_types
-    else:
-        run_code = analysis_type in ("code", "all")
-        run_arch = analysis_type in ("architectural", "all")
-        run_struct = analysis_type in ("structural", "all")
-
-    # ---- Code smells ----
-    if run_code:
-        try:
-            det = (
-                CodeSmellDetector(thresholds=code_thresh)
-                if code_thresh
-                else CodeSmellDetector()
-            )
-            py_files = _python_files(target, set(ignore))
-            for py_file in py_files:
-                try:
-                    det.detect_smells(str(py_file))
-                except Exception as exc:
-                    results["errors"].append(
-                        {
-                            "file": str(py_file),
-                            "phase": "code_smells",
-                            "error": str(exc),
-                        }
-                    )
-            try:
-                det.detect_cross_file_smells()
-            except Exception:
-                pass
-            results["code_smells"] = _extract_smell_list(det, "code_smells")
-        except Exception as exc:
-            results["code_smells"] = {"error": str(exc)}
-
-    # ---- Architectural smells ----
-    if run_arch and target.is_dir():
-        try:
-            det = (
-                ArchitecturalSmellDetector(thresholds=arch_thresh)
-                if arch_thresh
-                else ArchitecturalSmellDetector()
-            )
-            det.analyze_directory(str(target), ignore)
-            results["architectural_smells"] = _extract_smell_list(
-                det, "architectural_smells"
-            )
-        except Exception as exc:
-            results["architectural_smells"] = {"error": str(exc)}
-
-    # ---- Structural smells ----
-    if run_struct:
-        try:
-            det = (
-                StructuralSmellDetector(thresholds=struct_thresh)
-                if struct_thresh
-                else StructuralSmellDetector()
-            )
-            if target.is_dir():
-                det.detect_smells(str(target), ignore)
-            else:
-                det.analyze_file(str(target))
-            results["structural_smells"] = _extract_smell_list(det, "structural_smells")
-        except Exception as exc:
-            results["structural_smells"] = {"error": str(exc)}
-
-    return results
-
-
-def _extract_smell_list(detector: Any, attr: str) -> list[dict]:
-    """Extract smell list from a detector object in various formats."""
-    # Try common attribute names
-    for a in (attr, "smells", "results", "_smells", "detected_smells"):
-        val = getattr(detector, a, None)
-        if val is not None:
-            if isinstance(val, list):
-                return [_smell_to_dict(s) for s in val]
-            if isinstance(val, dict):
-                return list(val.values())
-    # Fallback: print_report to string
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as fh:
+        yaml.safe_dump(_pyexamine_config(cfg), fh)
     try:
-        import contextlib
-        import io
+        with DETECTOR_LOCK:
+            report = analyze(str(target), types=types, config=fh.name, ignore=ignore)
+    except Exception as exc:
+        for t in types:
+            results[_PY_TYPES[t][1]] = {"error": str(exc)}
+        return results
+    finally:
+        os.unlink(fh.name)
 
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            detector.print_report()
-        return [{"report": buf.getvalue()}]
-    except Exception:
-        return []
+    results["errors"] = report.get("errors", [])
+    for t in types:
+        label, key = _PY_TYPES[t]
+        results[key] = [f for f in report["findings"] if f["type"] == label]
+    return results
 
 
 # ---------------------------------------------------------------------------

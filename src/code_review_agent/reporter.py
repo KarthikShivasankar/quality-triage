@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -144,6 +145,20 @@ _SEVERITY_ML = {
     "reproducibility": Severity.CRITICAL,
 }
 
+# Per-module heuristics, documentation and literal-style checks rank below
+# line-level framework misuse; otherwise every ML finding would be "high".
+_ML_LOW_RE = re.compile(r"docstring|magic number|hard-?coded", re.IGNORECASE)
+
+
+def ml_severity(name: str, line: int, family: str) -> Severity:
+    key = name.lower().replace(" ", "_")
+    if key in _SEVERITY_ML:
+        return _SEVERITY_ML[key]
+    if not line or _ML_LOW_RE.search(name):
+        return Severity.LOW
+    return Severity.MEDIUM if family == "general" else Severity.HIGH
+
+
 _SEVERITY_STR = {
     "critical": Severity.CRITICAL,
     "high": Severity.HIGH,
@@ -227,8 +242,8 @@ class FindingNormalizer:
         name = text.split(":", 1)[0].strip() or "Unknown"
         fp = smell.get("file_path") or file_abs
         line = int(smell.get("line_number", 0) or 0)
-        sev_key = name.lower().replace(" ", "_")
-        sev = _SEVERITY_ML.get(sev_key, Severity.HIGH)
+        family = {"MLFW": "framework", "MLHF": "huggingface"}.get(prefix, "general")
+        sev = ml_severity(name, line, family)
         out.append(
             Finding(
                 finding_id=self._next_id(prefix),
@@ -247,11 +262,8 @@ class FindingNormalizer:
                 extra={
                     "benefits": smell.get("benefits", ""),
                     "strategies": smell.get("strategies", ""),
-                    "smell_family": {
-                        "MLFW": "framework",
-                        "MLHF": "huggingface",
-                        "MLGN": "general",
-                    }.get(prefix, "general"),
+                    "smell_family": family,
+                    "rule_id": smell.get("rule_id"),
                 },
             )
         )

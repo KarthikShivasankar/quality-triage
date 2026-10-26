@@ -530,8 +530,8 @@ wheels = [
 
 [[package]]
 name = "code-quality-analyzer"
-version = "0.2.2"
-source = { git = "https://github.com/KarthikShivasankar/python_smells_detector?rev=bb69324c81739f0af4f4e7e3c3191fadd6f082a0#bb69324c81739f0af4f4e7e3c3191fadd6f082a0" }
+version = "0.3.0"
+source = { git = "https://github.com/KarthikShivasankar/python_smells_detector?rev=838b212fafe9b1ff1e06c3364892e53177dab16f#838b212fafe9b1ff1e06c3364892e53177dab16f" }
 dependencies = [
     { name = "astroid" },
     { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
@@ -556,6 +556,7 @@ dependencies = [
     { name = "rich" },
     { name = "rich-click" },
     { name = "tdsuite" },
+    { name = "tenacity" },
 ]
 
 [package.optional-dependencies]
@@ -578,10 +579,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "code-quality-analyzer", git = "https://github.com/KarthikShivasankar/python_smells_detector?rev=bb69324c81739f0af4f4e7e3c3191fadd6f082a0" },
+    { name = "code-quality-analyzer", git = "https://github.com/KarthikShivasankar/python_smells_detector?rev=838b212fafe9b1ff1e06c3364892e53177dab16f" },
     { name = "gradio", marker = "extra == 'ui'", specifier = ">=5.20,<6" },
     { name = "litellm", specifier = ">=1.90.0" },
-    { name = "ml-code-smell-detector", git = "https://github.com/KarthikShivasankar/ml_smells_detector?rev=b2681cb74c671e3cd588ed77e5bb2db695466e5f" },
+    { name = "ml-code-smell-detector", git = "https://github.com/KarthikShivasankar/ml_smells_detector?rev=b2f17f7dc20c2dc288568d8179cff2a86dc363f8" },
     { name = "onnxruntime", specifier = ">=1.16.0" },
     { name = "onnxscript", marker = "extra == 'td-torch'", specifier = ">=0.1.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
@@ -589,6 +590,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7" },
     { name = "rich-click", specifier = ">=1.8" },
     { name = "tdsuite", git = "https://github.com/KarthikShivasankar/text_classification?rev=bb83e603eb6bc831c5284e8377583aeb610a43ec" },
+    { name = "tenacity", specifier = ">=8.2" },
     { name = "torch", marker = "extra == 'td-torch'", specifier = ">=2.0.0" },
 ]
 provides-extras = ["td-torch", "ui"]
@@ -2003,8 +2005,8 @@ wheels = [
 
 [[package]]
 name = "ml-code-smell-detector"
-version = "0.1.1"
-source = { git = "https://github.com/KarthikShivasankar/ml_smells_detector?rev=b2681cb74c671e3cd588ed77e5bb2db695466e5f#b2681cb74c671e3cd588ed77e5bb2db695466e5f" }
+version = "0.2.0"
+source = { git = "https://github.com/KarthikShivasankar/ml_smells_detector?rev=b2f17f7dc20c2dc288568d8179cff2a86dc363f8#b2f17f7dc20c2dc288568d8179cff2a86dc363f8" }
 dependencies = [
     { name = "astroid" },
     { name = "tqdm" },
@@ -4396,6 +4398,15 @@ dependencies = [
     { name = "seaborn" },
     { name = "tqdm" },
     { name = "transformers" },
+]
+
+[[package]]
+name = "tenacity"
+version = "9.2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/9e/497c1c8ebe5a5b5d1d4a7511aea22c0bb1a97e3170d98abdef0e1b34265a/tenacity-9.2.1.tar.gz", hash = "sha256:a606b5c808d0cded4a359d5b9932d867ff2a6a6b64d37350260fd01bbdf83839", size = 58261, upload-time = "2026-10-07T12:13:01.633Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d6/26/1ff2b0721ac66a3ec5b1402b333110b352ab0a8724052ac279a7b82d40c4/tenacity-9.2.1-py3-none-any.whl", hash = "sha256:9e56f17539296baab7beabb08b92f6ee3d7be92d8be72d763360677c2ad6580e", size = 32310, upload-time = "2026-10-07T12:13:00.102Z" },
 ]
 
 [[package]]

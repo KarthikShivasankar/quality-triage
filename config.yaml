@@ -106,7 +106,7 @@ code_smells:
     value: 4
     explanation: "Distinct method name prefix count threshold."
   DIVERGENT_CHANGE_METHODS:
-    value: 6
+    value: 5
     explanation: "Minimum method count before divergent-change detection applies."
   SHOTGUN_SURGERY_CALLS:
     value: 5
@@ -118,13 +118,13 @@ code_smells:
     value: 0.3
     explanation: "Ratio of comment lines to total lines."
   LARGE_COMMENT_BLOCKS:
-    value: 2
+    value: 5
     explanation: "Number of comment blocks longer than 5 lines (used with EXCESSIVE_COMMENTS_RATIO)."
   LAZY_CLASS_METHODS:
-    value: 4
+    value: 1
     explanation: "Classes with this few methods or fewer are lazy."
   LAZY_CLASS_LINES:
-    value: 20
+    value: 10
     explanation: "Maximum LOC for a lazy class."
   DATA_CLASS_METHODS:
     value: 4
@@ -133,7 +133,7 @@ code_smells:
     value: 3
     explanation: "Calls to another object's methods threshold."
   INAPPROPRIATE_INTIMACY_SHARED:
-    value: 3
+    value: 2
     explanation: "Shared fields/methods between classes threshold."
   MESSAGE_CHAIN_LENGTH:
     value: 3
@@ -148,10 +148,10 @@ code_smells:
     value: 3
     explanation: "Classes with identical method sets threshold."
   DUPLICATE_CODE_THRESHOLD:
-    value: 15
+    value: 2
     explanation: "Identical code blocks threshold."
   DEAD_CODE_THRESHOLD:
-    value: 3
+    value: 1
     explanation: "Defined-but-never-called functions threshold."
   SPECULATIVE_GENERALITY_THRESHOLD:
     value: 4
@@ -221,7 +221,7 @@ structural_smells:
     value: 25
     explanation: "Message Passing Coupling."
   CBO_THRESHOLD:
-    value: 5
+    value: 8
     explanation: "Coupling Between Objects."
   NOC_THRESHOLD:
     value: 7

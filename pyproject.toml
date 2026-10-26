@@ -19,6 +19,7 @@ dependencies = [
     "tdsuite",
     "code-quality-analyzer",
     "onnxruntime>=1.16.0",
+    "tenacity>=8.2",
 ]
 
 [project.optional-dependencies]
@@ -34,9 +35,9 @@ ui = [
 code-review = "code_review_agent.cli:main"
 
 [tool.uv.sources]
-ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", rev = "b2681cb74c671e3cd588ed77e5bb2db695466e5f" }
+ml-code-smell-detector = { git = "https://github.com/KarthikShivasankar/ml_smells_detector", rev = "b2f17f7dc20c2dc288568d8179cff2a86dc363f8" }
 tdsuite = { git = "https://github.com/KarthikShivasankar/text_classification", rev = "bb83e603eb6bc831c5284e8377583aeb610a43ec" }
-code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", rev = "bb69324c81739f0af4f4e7e3c3191fadd6f082a0" }
+code-quality-analyzer = { git = "https://github.com/KarthikShivasankar/python_smells_detector", rev = "838b212fafe9b1ff1e06c3364892e53177dab16f" }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/code_review_agent"]

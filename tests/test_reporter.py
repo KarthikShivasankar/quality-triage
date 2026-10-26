@@ -292,3 +292,13 @@ def test_ml_smells_smell_key_keeps_category_and_message():
     data = build_report(target="/proj", provider="ollama", model="x", ml_raw=raw)
     assert data.findings[0].category == "Magic number detected"
     assert data.findings[0].message == "Magic number detected: 500"
+
+
+def test_ml_severity_is_graded():
+    from code_review_agent.reporter import Severity, ml_severity
+
+    assert ml_severity("data leakage", 3, "framework") == Severity.CRITICAL
+    assert ml_severity("Missing docstring for function", 3, "general") == Severity.LOW
+    assert ml_severity("Randomness Control Checker", 0, "framework") == Severity.LOW
+    assert ml_severity("Chain Indexing", 12, "framework") == Severity.HIGH
+    assert ml_severity("Inefficient Operations", 12, "general") == Severity.MEDIUM
