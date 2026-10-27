@@ -36,7 +36,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from code_review_agent.llm import CompletionResult, LLMClient
+from code_review_agent.llm import CompletionResult, LLMClient, complete_guarded
 
 # Whole-module or cross-module findings cannot be fixed by rewriting one unit.
 UNFIXABLE_CATEGORIES = re.compile(
@@ -774,11 +774,8 @@ class Harness:
             self.baseline_behaviour = self.behaviour()
 
     def complete(self, messages: list[dict[str, str]]) -> CompletionResult:
-        """One call; an empty or truncated answer is retried once (silent-failure guard)."""
-        res = self.client.complete_text(messages)
-        if not res.content.strip() or res.finish_reason == "length":
-            res = self.client.complete_text(messages)
-        return res
+        """One call; an empty or cut-off answer is retried (silent-failure guard)."""
+        return complete_guarded(self.client, messages)
 
     def check(self, target: Target, source: str, attempt: Attempt) -> str | None:
         """Fill ``attempt.checks``; return the patched source if all checks pass."""

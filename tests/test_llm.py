@@ -263,3 +263,23 @@ def test_complete_text_dict_tool_calls(monkeypatch):
     result = client.complete_text([{"role": "user", "content": "x"}])
     assert result.tool_calls[0].name == "read_file"
     assert result.tool_calls[0].arguments["file_path"] == "a.py"
+
+
+def test_complete_guarded_doubles_budget_after_cutoff():
+    from code_review_agent.llm import CompletionResult, complete_guarded
+
+    class Fake:
+        max_tokens = 100
+
+        def __init__(self):
+            self.budgets = []
+
+        def complete_text(self, messages, tools=None):
+            self.budgets.append(self.max_tokens)
+            if len(self.budgets) == 1:
+                return CompletionResult(content="", finish_reason="length")
+            return CompletionResult(content="ok", finish_reason="stop")
+
+    fake = Fake()
+    assert complete_guarded(fake, []).content == "ok"
+    assert fake.budgets == [100, 200] and fake.max_tokens == 100

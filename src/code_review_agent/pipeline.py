@@ -17,7 +17,7 @@ from typing import Any, Callable, Iterator
 
 from code_review_agent.config import AppConfig, get_config
 from code_review_agent.filters import split_smell_families
-from code_review_agent.llm import LLMClient, LLMError
+from code_review_agent.llm import LLMClient, LLMError, complete_guarded
 from code_review_agent.prompts import SYNTHESIS_PROMPT
 from code_review_agent.reporter import (
     SEVERITY_ORDER,
@@ -361,11 +361,10 @@ def synthesize_report(
     ]
     # An empty answer (e.g. a reasoning model that spent its budget thinking)
     # must not look like a clean report: retry once, then fail loudly.
-    for _ in range(2):
-        result = client.complete_text(messages)
-        text = clean_synthesis(result.content)
-        if text:
-            return text
+    result = complete_guarded(client, messages)
+    text = clean_synthesis(result.content)
+    if text:
+        return text
     raise LLMError(
         f"empty answer from the model (finish_reason={result.finish_reason})"
     )

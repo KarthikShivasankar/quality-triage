@@ -27,6 +27,7 @@ __all__ = [
     "ToolCall",
     "CompletionResult",
     "LLMClient",
+    "complete_guarded",
     "resolve_model",
     "apply_provider_shim",
     "resolve_llm_model",
@@ -282,3 +283,21 @@ class LLMClient:
             text = _delta_content(chunk)
             if text:
                 yield text
+
+
+def complete_guarded(client: Any, messages: list[dict[str, Any]]) -> CompletionResult:
+    """``client.complete_text``, retried once when the answer is empty or cut off.
+
+    A cut-off answer is retried with twice the completion budget: at
+    temperature 0 the same request would mostly be cut off again."""
+    res = client.complete_text(messages)
+    if res.content.strip() and res.finish_reason != "length":
+        return res
+    budget = getattr(client, "max_tokens", None)
+    if res.finish_reason == "length" and budget:
+        client.max_tokens = budget * 2
+    try:
+        return client.complete_text(messages)
+    finally:
+        if budget:
+            client.max_tokens = budget
