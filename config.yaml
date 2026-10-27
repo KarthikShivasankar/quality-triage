@@ -42,6 +42,7 @@ github:
 # Tool execution defaults
 # ---------------------------------------------------------------------------
 tools:
+  skip_tests: true               # never analyse or refactor tests/, test_*.py, *_test.py, conftest.py
   ignore_dirs:
     - .git
     - __pycache__

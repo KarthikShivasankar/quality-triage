@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import traceback
 from pathlib import Path
@@ -44,11 +45,27 @@ def _enrich_column(file_path: str, line: int, snippet: str) -> int | None:
         return None
 
 
+_TEST_PATH = re.compile(
+    r"(^|/)(tests?|testing)(/|$)|(^|/)test_[^/]*\.py$|_test\.py$|(^|/)conftest\.py$"
+)
+
+
+def is_test_file(path: str | Path) -> bool:
+    """tests/ or testing/ directories, test_*.py, *_test.py and conftest.py."""
+    return bool(_TEST_PATH.search(Path(path).as_posix()))
+
+
 def _python_files(path: Path, ignore: set[str]) -> list[Path]:
+    """Python files under ``path``; test code is left out when ``tools.skip_tests``
+    is on (a single file given explicitly is always analysed)."""
     if path.is_file() and path.suffix == ".py":
         return [path]
+    skip_tests = _get_cfg().tools.skip_tests
     return [
-        f for f in path.rglob("*.py") if not any(part in ignore for part in f.parts)
+        f
+        for f in path.rglob("*.py")
+        if not any(part in ignore for part in f.parts)
+        and not (skip_tests and is_test_file(f.relative_to(path)))
     ]
 
 
@@ -193,6 +210,8 @@ def detect_python_smells(
 
     cfg = get_config(config_path) if config_path else _get_cfg()
     ignore = list(ignore_dirs or cfg.tools.ignore_dirs)
+    if cfg.tools.skip_tests:
+        ignore += ["tests", "test", "testing"]
 
     if analysis_types:
         types = [t for t in _PY_TYPES if t in analysis_types]
@@ -226,9 +245,18 @@ def detect_python_smells(
         os.unlink(fh.name)
 
     results["errors"] = report.get("errors", [])
+    findings = report["findings"]
+    if cfg.tools.skip_tests and target.is_dir():
+        findings = [
+            f
+            for f in findings
+            if not (
+                f.get("file_path") and is_test_file(_rel(f["file_path"], str(target)))
+            )
+        ]
     for t in types:
         label, key = _PY_TYPES[t]
-        results[key] = [f for f in report["findings"] if f["type"] == label]
+        results[key] = [f for f in findings if f["type"] == label]
     return results
 
 

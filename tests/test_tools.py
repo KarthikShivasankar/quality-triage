@@ -269,3 +269,30 @@ class TestClassifyTechnicalDebt:
         if "error" not in result:
             assert "predictions" in result
             assert len(result["predictions"]) == 1
+
+
+def test_is_test_file():
+    from code_review_agent.tools import is_test_file
+
+    for p in (
+        "tests/test_x.py",
+        "pkg/tests/helpers.py",
+        "test_a.py",
+        "pkg/a_test.py",
+        "conftest.py",
+    ):
+        assert is_test_file(p), p
+    for p in ("pkg/core.py", "pkg/testing_utils.py", "contest.py", "latest.py"):
+        assert not is_test_file(p), p
+
+
+def test_detectors_skip_test_code(tmp_path):
+    from code_review_agent.tools import _python_files
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "core.py").write_text("x = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_core.py").write_text("x = 1\n")
+    (tmp_path / "conftest.py").write_text("x = 1\n")
+    files = {p.relative_to(tmp_path).as_posix() for p in _python_files(tmp_path, set())}
+    assert files == {"pkg/core.py"}

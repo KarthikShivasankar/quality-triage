@@ -335,3 +335,22 @@ def test_related_findings_grouped_into_prompt(tmp_path):
     assert [f["category"] for f in t.related] == ["Magic number detected"]
     user = build_messages(t, SOURCE)[1]["content"]
     assert "Other findings in this unit" in user and "Magic number detected" in user
+
+
+def test_select_targets_never_targets_test_code(tmp_path):
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_m.py").write_text(SOURCE)
+    findings = [{"category": "Deep Nesting", "file": "tests/test_m.py", "line": 7}]
+    assert select_targets(findings, tmp_path) == []
+
+
+def test_class_attributes_are_interface():
+    old = "class C:\n    name = 'x'\n    def f(self):\n        return 1\n"
+    unit = enclosing_unit(old, 1)
+    ok, why = interface_preserved(
+        old, "class C:\n    def f(self):\n        return 1\n", unit
+    )
+    assert not ok and "name" in why
+    assert interface_preserved(old, old.replace("return 1", "return int(True)"), unit)[
+        0
+    ]

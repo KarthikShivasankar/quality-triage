@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from code_review_agent.llm import CompletionResult, LLMClient, complete_guarded
+from code_review_agent.tools import is_test_file
 
 # Whole-module or cross-module findings cannot be fixed by rewriting one unit.
 UNFIXABLE_CATEGORIES = re.compile(
@@ -197,8 +198,8 @@ def select_targets(
     out: list[Target] = []
     for f in findings:
         cat = f.get("category", "")
-        if f.get("line", 0) < 0 or not f.get("file"):
-            continue
+        if f.get("line", 0) < 0 or not f.get("file") or is_test_file(f["file"]):
+            continue  # test code is never refactored
         if include and not include.search(cat):
             continue
         if exclude and exclude.search(cat):
@@ -353,7 +354,15 @@ def _signature(node: ast.AST) -> Any:
             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
             and (not n.name.startswith("_") or n.name.startswith("__"))
         }
-        return ("class", node.name, [ast.dump(b) for b in node.bases], methods)
+        attrs = sorted(
+            n.id
+            for stmt in node.body
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign))
+            for t in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
+            for n in ast.walk(t)
+            if isinstance(n, ast.Name) and not n.id.startswith("_")
+        )
+        return ("class", node.name, [ast.dump(b) for b in node.bases], methods, attrs)
     a = node.args
     return (
         type(node).__name__,
@@ -413,7 +422,11 @@ def _same_interface(old: ast.AST, new: ast.AST | None) -> bool:
         return False
     o, n = _signature(old), _signature(new)
     if o[0] == "class" and n[0] == "class":
-        return o[2] == n[2] and all(n[3].get(m) == sig for m, sig in o[3].items())
+        return (
+            o[2] == n[2]
+            and all(n[3].get(m) == sig for m, sig in o[3].items())
+            and set(o[4]) <= set(n[4])
+        )
     return o == n
 
 
@@ -438,6 +451,9 @@ def interface_preserved(old_unit: str, new_block: str, unit: Unit) -> tuple[bool
         changed = [m for m in o[3] if m in n[3] and o[3][m] != n[3][m]]
         if missing or changed:
             return False, f"public methods removed {missing} or changed {changed}"
+        lost = sorted(set(o[4]) - set(n[4]))
+        if lost:
+            return False, f"public class attributes removed: {lost}"
         return True, ""
     if o != n:
         return False, "signature or decorators changed"

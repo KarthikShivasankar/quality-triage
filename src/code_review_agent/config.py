@@ -112,6 +112,8 @@ class ToolsConfig:
             ".ruff_cache",
         ]
     )
+    # test code (tests/ dirs, test_*.py, *_test.py, conftest.py) is never analysed or refactored
+    skip_tests: bool = True
     read_file_max_lines: int = 500
     td_classifier: TDClassifierConfig = field(default_factory=TDClassifierConfig)
 
@@ -254,6 +256,7 @@ def load_config(path: str | None = None) -> AppConfig:
     )
     tools_cfg = ToolsConfig(
         ignore_dirs=tools_raw.get("ignore_dirs", ToolsConfig().ignore_dirs),
+        skip_tests=bool(tools_raw.get("skip_tests", True)),
         read_file_max_lines=tools_raw.get("read_file_max_lines", 500),
         td_classifier=_dc(TDClassifierConfig, td_raw)
         if td_raw
