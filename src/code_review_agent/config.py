@@ -75,6 +75,9 @@ class LLMConfig:
     num_retries: int = 2
     drop_params: bool = True
     fallbacks: list[str] = field(default_factory=list)
+    # extra request fields for the server, e.g. vLLM template options:
+    # {"chat_template_kwargs": {"reasoning_effort": "medium"}}
+    extra_body: dict[str, Any] | None = None
 
 
 @dataclass

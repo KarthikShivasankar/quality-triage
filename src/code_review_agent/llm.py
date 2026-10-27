@@ -183,6 +183,7 @@ class LLMClient:
         self.num_retries = cfg.num_retries
         self.drop_params = cfg.drop_params
         self.fallbacks = list(fallbacks if fallbacks is not None else cfg.fallbacks)
+        self.extra_body = cfg.extra_body
 
     def _kwargs(
         self,
@@ -217,6 +218,8 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        if self.extra_body:
+            kwargs["extra_body"] = self.extra_body
         return kwargs
 
     def _call(self, **kwargs: Any) -> Any:

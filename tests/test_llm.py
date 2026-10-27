@@ -283,3 +283,15 @@ def test_complete_guarded_doubles_budget_after_cutoff():
     fake = Fake()
     assert complete_guarded(fake, []).content == "ok"
     assert fake.budgets == [100, 200] and fake.max_tokens == 100
+
+
+def test_extra_body_passed_through():
+    from code_review_agent.config import LLMConfig
+    from code_review_agent.llm import LLMClient
+
+    body = {"chat_template_kwargs": {"reasoning_effort": "medium"}}
+    kw = LLMClient(LLMConfig(extra_body=body))._kwargs(
+        [{"role": "user", "content": "x"}]
+    )
+    assert kw["extra_body"] == body
+    assert "extra_body" not in LLMClient(LLMConfig())._kwargs([])
