@@ -568,7 +568,14 @@ def analyze_file(
 )
 @click.option("--max-targets", default=10, show_default=True, type=int)
 @click.option("--max-attempts", default=3, show_default=True, type=int)
-@click.option("--max-unit-lines", default=120, show_default=True, type=int)
+@click.option("--max-unit-lines", default=200, show_default=True, type=int)
+@click.option(
+    "--max-module-lines",
+    default=250,
+    show_default=True,
+    type=int,
+    help="File-level findings rewrite the whole module up to this size (0: skip them)",
+)
 @click.option(
     "--max-tokens",
     default=None,
@@ -602,6 +609,7 @@ def refactor(
     max_targets,
     max_attempts,
     max_unit_lines,
+    max_module_lines,
     max_tokens,
     timeout,
     apply,
@@ -654,6 +662,7 @@ def refactor(
         harness.baseline_findings or [],
         path,
         max_unit_lines=max_unit_lines,
+        max_module_lines=max_module_lines,
         include=re.compile(category, re.I) if category else None,
     )[:max_targets]
     console.print(f"[cyan]{len(targets)} target(s), model {resolved}[/cyan]")

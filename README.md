@@ -94,9 +94,9 @@ code-review refactor ./src --model openai/my-model --api-base http://127.0.0.1:8
 code-review refactor ./src --category "Long Method|Cyclomatic" --apply
 ```
 
-For each finding inside a function or class (at most `--max-unit-lines`, module-level and cross-module findings are skipped), the model rewrites that unit and the rewrite must:
+For each finding the model rewrites the smallest unit that contains it: the enclosing function or class (at most `--max-unit-lines`), otherwise the module-level statement (e.g. a magic number in a script), and for a file-level finding (line 0, e.g. missing seeding or duplicate code) the whole module when it has at most `--max-module-lines`. Findings that need changes across modules (orphan modules, cyclic or hub-like dependencies, long files, …) are skipped. The rewrite must:
 
-1. compile and keep the unit's name, parameters, defaults, decorators and public methods;
+1. compile and keep the unit's interface: name, parameters, defaults, decorators and public methods of a function or class; every name a module-level statement binds; every public definition and module-level name of a whole module;
 2. make the targeted rule fire less often in the unit, with no other rule firing more;
 3. add none of the patterns that satisfy a detector without fixing the design: aliasing imported names, suppression comments (`noqa`, `mlscent: ignore`, …), packing statements with `;`, strings built from `chr()`, statements that only touch a name;
 4. leave `--test-cmd` with the same exit code, no fewer passes and no more failures.

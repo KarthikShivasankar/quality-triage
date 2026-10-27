@@ -1,9 +1,10 @@
 """
 Detector-verified refactoring harness.
 
-For each detector finding inside a function or class, the LLM rewrites that
-unit and the rewrite is spliced into the file. It is kept only if every check
-passes:
+For each detector finding the LLM rewrites the smallest unit that contains it:
+the enclosing function or class, else the module-level statement, or the whole
+module for a file-level finding (small files only). The rewrite is spliced into
+the file and kept only if every check passes:
 
 1. the file parses and the unit's interface (name, parameters, decorators,
    public methods) is unchanged;
@@ -41,7 +42,8 @@ from code_review_agent.llm import CompletionResult, LLMClient
 UNFIXABLE_CATEGORIES = re.compile(
     r"orphan module|hub-like|cyclic|unstable dependenc|god object|long file|"
     r"high lines of code|number of classes|classes per module|scattered|"
-    r"potential improper api|redundant abstraction",
+    r"potential improper api|redundant abstraction|parallel inheritance|"
+    r"high fan-|alternative classes|unit testing checker",
     re.IGNORECASE,
 )
 
@@ -51,6 +53,7 @@ Rules:
 - Keep the unit's name, parameters, defaults, decorators, return values, side effects, raised exceptions and public names. Never add *args/**kwargs.
 - You may add private helper functions (or private methods, for a method or class) next to the unit, and imports at the top of your block.
 - Improve the design the rule names; do not just make the detector stop matching. Not allowed: binding imported names to local aliases, suppression comments (noqa, pylint, mlscent: ignore, type: ignore), semicolons or packing statements onto one line, building strings from character codes, statements that only touch a name, deleting behaviour.
+- For a module-level statement, keep every name it binds. For a whole module, keep every public top-level function and class (with their public methods and signatures) and every module-level name.
 - If the finding is a false positive, or cannot be fixed inside this unit without changing its interface or other files, reply exactly: NO_CHANGE: <one-sentence reason>
 - Otherwise reply with exactly one fenced ```python block holding the complete replacement for the unit (plus any helpers and imports) and nothing else."""
 
@@ -76,7 +79,7 @@ class Unit:
     start: int  # first line, including decorators
     end: int
     name: str
-    kind: str  # "function" | "class"
+    kind: str  # "function" | "class" | "statement" | "module"
     indent: int
 
 
@@ -86,6 +89,8 @@ class Target:
         str, Any
     ]  # id, tool, category, severity, file, line, message, how_to_fix
     unit: Unit
+    # other findings inside the same unit; the model is asked to fix them too
+    related: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def category(self) -> str:
@@ -142,22 +147,57 @@ def enclosing_unit(source: str, line: int, file: str = "") -> Unit | None:
     return Unit(file, start, node.end_lineno, node.name, kind, node.col_offset)
 
 
+def module_statement(source: str, line: int, file: str = "") -> Unit | None:
+    """Top-level statement containing ``line``; ``name`` is its first line (for relocation)."""
+    for node in ast.parse(source).body:
+        start = min(
+            [node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))]
+        )
+        if start <= line <= node.end_lineno:
+            first = source.splitlines()[start - 1].strip()[:80]
+            return Unit(file, start, node.end_lineno, first, "statement", 0)
+    return None
+
+
+def target_unit(
+    source: str,
+    line: int,
+    file: str = "",
+    *,
+    max_unit_lines: int = 200,
+    max_module_lines: int = 250,
+) -> Unit | None:
+    """What to rewrite for a finding at ``line`` (0 means a file-level finding)."""
+    if line <= 0:
+        n = len(source.splitlines())
+        if not 0 < n <= max_module_lines:
+            return None
+        return Unit(file, 1, n, Path(file).stem or "module", "module", 0)
+    unit = enclosing_unit(source, line, file) or module_statement(source, line, file)
+    if unit is None or unit.end - unit.start + 1 > max_unit_lines:
+        return None
+    return unit
+
+
 def select_targets(
     findings: list[dict[str, Any]],
     root: str | Path,
     *,
-    max_unit_lines: int = 120,
+    max_unit_lines: int = 200,
+    max_module_lines: int = 250,
     include: re.Pattern[str] | None = None,
     exclude: re.Pattern[str] | None = UNFIXABLE_CATEGORIES,
 ) -> list[Target]:
-    """One target per (file, unit): the first line-level finding inside it."""
+    """One target per unit: the first finding inside it, with the unit's other
+    findings in ``related``. File-level findings (line 0) target the whole
+    module when it has at most ``max_module_lines``."""
     root = Path(root)
     sources: dict[str, str] = {}
-    seen: set[tuple[str, int]] = set()
+    seen: dict[tuple[str, int, str], Target] = {}
     out: list[Target] = []
     for f in findings:
         cat = f.get("category", "")
-        if f.get("line", 0) <= 0 or not f.get("file"):
+        if f.get("line", 0) < 0 or not f.get("file"):
             continue
         if include and not include.search(cat):
             continue
@@ -171,18 +211,42 @@ def select_targets(
                 sources[f["file"]] = ""
         if not sources[f["file"]]:
             continue
-        unit = enclosing_unit(sources[f["file"]], f["line"], f["file"])
-        if unit is None or unit.end - unit.start + 1 > max_unit_lines:
+        unit = target_unit(
+            sources[f["file"]],
+            f.get("line", 0),
+            f["file"],
+            max_unit_lines=max_unit_lines,
+            max_module_lines=max_module_lines,
+        )
+        if unit is None:
             continue
-        if (f["file"], unit.start) in seen:
+        key = (f["file"], unit.start, unit.kind)
+        if unit.kind == "module":
+            key = (f["file"], 0, cat)  # one whole-module target per rule
+        if key in seen:
+            seen[key].related.append(dict(f))
             continue
-        seen.add((f["file"], unit.start))
-        out.append(Target(finding=dict(f), unit=unit))
+        seen[key] = Target(finding=dict(f), unit=unit)
+        out.append(seen[key])
     return out
 
 
 def relocate(source: str, unit: Unit) -> Unit | None:
     """Find ``unit`` again after earlier edits shifted lines (same name and kind, nearest start)."""
+    if unit.kind == "module":
+        return Unit(unit.file, 1, len(source.splitlines()), unit.name, "module", 0)
+    if unit.kind == "statement":
+        found = None
+        for node in ast.parse(source).body:
+            start = min(
+                [node.lineno, *(d.lineno for d in getattr(node, "decorator_list", []))]
+            )
+            first = source.splitlines()[start - 1].strip()[:80]
+            if first == unit.name and (
+                found is None or abs(start - unit.start) < abs(found.start - unit.start)
+            ):
+                found = Unit(unit.file, start, node.end_lineno, first, "statement", 0)
+        return found
     best = None
     for node in ast.walk(ast.parse(source)):
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -228,6 +292,8 @@ def splice(source: str, unit: Unit, new_code: str) -> tuple[str, int, int]:
     whole spliced block (unit plus helpers).
     """
     block = textwrap.dedent(new_code).strip("\n") + "\n"
+    if unit.kind == "module":
+        return block, 1, len(block.splitlines())
     imports: list[str] = []
     try:
         tree = ast.parse(block)
@@ -303,6 +369,54 @@ def _signature(node: ast.AST) -> Any:
     )
 
 
+def _bound_names(tree: ast.Module) -> set[str]:
+    """Names a module body binds at top level."""
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names |= {(a.asname or a.name).split(".")[0] for a in node.names}
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for t in targets:
+                names |= {n.id for n in ast.walk(t) if isinstance(n, ast.Name)}
+    return names
+
+
+def _module_interface(
+    old: ast.Module, new: ast.Module, whole: bool
+) -> tuple[bool, str]:
+    missing = sorted(_bound_names(old) - _bound_names(new))
+    if whole:
+        missing = [m for m in missing if not m.startswith("_")]
+    if missing:
+        return False, f"module-level names no longer bound: {missing}"
+    if not whole:
+        return True, ""
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    new_defs = {n.name: n for n in new.body if isinstance(n, defs)}
+    changed = [
+        n.name
+        for n in old.body
+        if isinstance(n, defs)
+        and not n.name.startswith("_")
+        and not _same_interface(n, new_defs.get(n.name))
+    ]
+    if changed:
+        return False, f"public definitions changed or removed: {changed}"
+    return True, ""
+
+
+def _same_interface(old: ast.AST, new: ast.AST | None) -> bool:
+    if new is None:
+        return False
+    o, n = _signature(old), _signature(new)
+    if o[0] == "class" and n[0] == "class":
+        return o[2] == n[2] and all(n[3].get(m) == sig for m, sig in o[3].items())
+    return o == n
+
+
 def interface_preserved(old_unit: str, new_block: str, unit: Unit) -> tuple[bool, str]:
     """The block must define the unit with the same interface; class units keep public methods."""
     try:
@@ -310,6 +424,8 @@ def interface_preserved(old_unit: str, new_block: str, unit: Unit) -> tuple[bool
         new = ast.parse(textwrap.dedent(new_block))
     except SyntaxError as exc:
         return False, f"syntax error: {exc}"
+    if unit.kind in ("statement", "module"):
+        return _module_interface(old, new, unit.kind == "module")
     old_node = next(n for n in old.body if getattr(n, "name", None) == unit.name)
     match = [n for n in new.body if getattr(n, "name", None) == unit.name]
     if len(match) != 1:
@@ -413,10 +529,13 @@ def rule_delta(
             f["category"] for f in fs if f["file"] == u.file and lo <= f["line"] <= hi
         )
 
-    b = count(before, u.start, u.end)
-    a = count(after, *new_span)
     file_b = Counter(f["category"] for f in before if f["file"] == u.file)
     file_a = Counter(f["category"] for f in after if f["file"] == u.file)
+    if u.kind == "module":  # file-level findings carry line 0
+        b, a = file_b, file_a
+    else:
+        b = count(before, u.start, u.end)
+        a = count(after, *new_span)
     return {
         "target_removed": a[target.category] < b[target.category],
         "before": dict(b),
@@ -507,17 +626,37 @@ def build_messages(
 ) -> list[dict[str, str]]:
     u = target.unit
     code = unit_source(source, u)
-    header = f"Code unit ({u.file}, lines {u.start}-{u.end}):\n```python\n{code}```"
+    label = {
+        "module": f"Whole module ({u.file})",
+        "statement": f"Module-level statement ({u.file}, lines {u.start}-{u.end})",
+    }.get(u.kind, f"Code unit ({u.file}, lines {u.start}-{u.end})")
+    header = f"{label}:\n```python\n{code}```"
     imports = "".join(
         ln
         for ln in source.splitlines(keepends=True)[: _import_insertion_line(source)]
         if ln.startswith(("import ", "from "))
     )
-    context = f"Module imports:\n```python\n{imports}```\n\n" if imports else ""
+    context = (
+        f"Module imports:\n```python\n{imports}```\n\n"
+        if imports and u.kind != "module"
+        else ""
+    )
     if grounded:
         keys = ("tool", "category", "severity", "file", "line", "message", "how_to_fix")
         finding = {k: target.finding.get(k) for k in keys}
-        user = f"Finding:\n```json\n{json.dumps(finding, indent=1, default=str)}\n```\n\n{context}{header}"
+        user = (
+            f"Finding:\n```json\n{json.dumps(finding, indent=1, default=str)}\n```\n\n"
+        )
+        if target.related:
+            others = [
+                {k: f.get(k) for k in ("category", "line", "message")}
+                for f in target.related
+            ]
+            user += (
+                "Other findings in this unit; fix them too where you can do so "
+                f"honestly:\n```json\n{json.dumps(others, indent=1, default=str)}\n```\n\n"
+            )
+        user += f"{context}{header}"
     else:
         user = f"{context}{header}"
     return [
