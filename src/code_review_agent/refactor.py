@@ -460,6 +460,28 @@ def interface_preserved(old_unit: str, new_block: str, unit: Unit) -> tuple[bool
     return True, ""
 
 
+def duplicate_definitions(source: str) -> set[str]:
+    """``scope.name`` of functions/classes defined more than once in the same scope
+    (module or class body); a later definition silently replaces the earlier one."""
+    dups: set[str] = set()
+
+    def visit(body: list[ast.stmt], scope: str) -> None:
+        seen: set[str] = set()
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in seen and not node.decorator_list:
+                    dups.add(f"{scope}.{node.name}")
+                seen.add(node.name)
+                if isinstance(node, ast.ClassDef):
+                    visit(node.body, f"{scope}.{node.name}")
+
+    try:
+        visit(ast.parse(source).body, "<module>")
+    except SyntaxError:
+        pass
+    return dups
+
+
 def _statements_per_line(code: str) -> int:
     """Number of ';' separators (statement packing)."""
     try:
@@ -690,6 +712,11 @@ def feedback_message(attempt: Attempt) -> str:
         problems.append(f"The patched file does not compile: {c.get('compile_error')}")
     if c.get("interface") is False:
         problems.append(f"The interface changed: {c.get('interface_error')}")
+    for name in c.get("name_collisions", []):
+        problems.append(
+            f"`{name}` is now defined twice in the same scope; the later definition "
+            "would replace the earlier one. Give new helpers unique names."
+        )
     for flag in c.get("gaming", []):
         problems.append(
             f"Detector-gaming pattern introduced: {flag.replace('_', ' ')}."
@@ -812,6 +839,9 @@ class Harness:
         if not ok:
             c["interface_error"] = why
         c["gaming"] = gaming_flags(old_unit, attempt.code, source)
+        c["name_collisions"] = sorted(
+            duplicate_definitions(new_source) - duplicate_definitions(source)
+        )
         c["span"] = [lo, hi]
         path = self.root / target.unit.file
         path.write_text(new_source, encoding="utf-8")
@@ -843,6 +873,7 @@ class Harness:
         attempt.passed = (
             c["interface"]
             and not c["gaming"]
+            and not c["name_collisions"]
             and not det["new_rules"]
             and (det["target_removed"] or not self.require_removal)
             and (c.get("behaviour") or {"same": True})["same"]

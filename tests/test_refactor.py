@@ -354,3 +354,29 @@ def test_class_attributes_are_interface():
     assert interface_preserved(old, old.replace("return 1", "return int(True)"), unit)[
         0
     ]
+
+
+def test_duplicate_definitions_and_collision_rejected(tmp_path):
+    from code_review_agent.refactor import duplicate_definitions
+
+    src = "class A:\n    def f(self):\n        return 1\n\n    def _h(self):\n        return 2\n"
+    assert duplicate_definitions(src) == set()
+    assert duplicate_definitions(
+        src + "\n    def _h(self, x):\n        return x\n"
+    ) == {"<module>.A._h"}
+
+    (tmp_path / "pkg.py").write_text(
+        NESTED + "\n\ndef _both(a, b):\n    return a and b\n"
+    )
+    clash = "```python\ndef _both(a, b):\n    return a and b\n\n\ndef nested(a, b):\n    if _both(a, b):\n        return a + b\n    return 0\n```"
+    h = Harness(
+        root=tmp_path,
+        client=FakeClient([clash]),
+        detect=nesting_detector,
+        max_attempts=1,
+    )
+    h.prepare()
+    [target] = select_targets(h.baseline_findings, tmp_path)
+    outcome = h.refactor(target)
+    assert outcome.status == "rejected"
+    assert outcome.attempts[0].checks["name_collisions"] == ["<module>._both"]
