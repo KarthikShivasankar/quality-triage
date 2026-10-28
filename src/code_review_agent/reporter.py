@@ -311,7 +311,11 @@ class FindingNormalizer:
             p.strip() for p in str(smell.get("file_path") or "").split(",") if p.strip()
         ]
         fp = paths[0] if paths else ""
-        related = [_rel(p, self.root) for p in paths[1:]]
+        related = [
+            r
+            for r in (_rel(p, self.root) for p in paths[1:])
+            if not (Path(r).is_absolute() or r.startswith(".."))
+        ]  # only files inside the project
         line = int(smell.get("line_number", 0) or 0)
         sev_raw = str(smell.get("severity", "medium") or "medium").lower()
         sev = _SEVERITY_STR.get(sev_raw, Severity.MEDIUM)

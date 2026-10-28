@@ -335,6 +335,25 @@ def parse_reply(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+def safe_relpath(root: Path, rel: str) -> bool:
+    """``rel`` names a location strictly inside ``root``: relative, no ``..``, and no
+    symlink on the way (model output chooses edit paths, so this guards every write)."""
+    p = Path(rel)
+    if not rel or p.is_absolute() or ".." in p.parts:
+        return False
+    root = Path(root).resolve()
+    cur = root
+    for part in p.parts:
+        cur = cur / part
+        if cur.is_symlink():
+            return False
+    try:
+        (root / p).resolve().relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
 def parse_edits(text: str) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
     """SEARCH/REPLACE edits and NEW FILE blocks from an edit-mode reply."""
     edits = [(p.strip(), s_, r) for p, s_, r in _EDIT_RE.findall(text or "")]
@@ -1044,6 +1063,8 @@ class Harness:
         return complete_guarded(self.client, messages)
 
     def _read(self, rel: str) -> str | None:
+        if not safe_relpath(self.root, rel):
+            return None
         path = self.root / rel
         return path.read_text(encoding="utf-8") if path.is_file() else None
 
@@ -1059,13 +1080,13 @@ class Harness:
         if target.edit:
             c["mode"] = "edit"
             edits, new_files = parse_edits(attempt.code)
+            allowed = {f for f in edit_files(target) if safe_relpath(self.root, f)}
             files, err = apply_edits(
-                self._read,
-                edits,
-                new_files,
-                set(edit_files(target)),
-                Path(u.file).parent.as_posix(),
+                self._read, edits, new_files, allowed, Path(u.file).parent.as_posix()
             )
+            unsafe = [f for f in files if not safe_relpath(self.root, f)]
+            if unsafe:
+                err = f"paths outside the project or through a symlink: {unsafe}"
             if err:
                 c["edit_error"] = err
                 return None

@@ -458,3 +458,42 @@ def test_harness_edit_mode_rejects_lost_public_name(tmp_path):
     outcome = h.refactor(target)
     assert outcome.status == "rejected"
     assert "gone" in outcome.attempts[0].checks["interface_error"]
+
+
+def test_safe_relpath_blocks_escape(tmp_path):
+    import os
+
+    from code_review_agent.refactor import safe_relpath
+
+    (tmp_path / "pkg").mkdir()
+    outside = tmp_path.parent / "outside_target"
+    outside.mkdir(exist_ok=True)
+    os.symlink(outside, tmp_path / "pkg" / "link")
+    assert safe_relpath(tmp_path, "pkg/m.py")
+    assert not safe_relpath(tmp_path, "../x.py")
+    assert not safe_relpath(tmp_path, "/etc/passwd")
+    assert not safe_relpath(tmp_path, "pkg/link/x.py")
+
+
+def test_edit_mode_refuses_files_outside_project(tmp_path):
+    (tmp_path / "m.py").write_text("def keep(x):\n    return x\n")
+    finding = {
+        "category": "Duplicate Code",
+        "file": "m.py",
+        "line": 0,
+        "related_files": ["../evil.py"],
+    }
+    reply = "FILE: ../evil.py\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\n"
+
+    def detect(root):
+        return [finding]
+
+    h = Harness(
+        root=tmp_path, client=FakeClient([reply]), detect=detect, max_attempts=1
+    )
+    h.prepare()
+    [target] = select_targets([finding], tmp_path)
+    outcome = h.refactor(target)
+    assert outcome.status == "rejected"
+    assert "not shown" in outcome.attempts[0].checks["edit_error"]
+    assert not (tmp_path.parent / "evil.py").exists()
