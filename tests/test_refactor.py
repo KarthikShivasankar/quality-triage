@@ -497,3 +497,22 @@ def test_edit_mode_refuses_files_outside_project(tmp_path):
     assert outcome.status == "rejected"
     assert "not shown" in outcome.attempts[0].checks["edit_error"]
     assert not (tmp_path.parent / "evil.py").exists()
+
+
+def test_symlinked_target_is_refused_and_untouched(tmp_path):
+    import os
+
+    outside = tmp_path.parent / "outside_pkg"
+    outside.mkdir(exist_ok=True)
+    (outside / "m.py").write_text(NESTED)
+    os.symlink(outside, tmp_path / "pkg")
+    finding = {"category": "Deep Nesting", "file": "pkg/m.py", "line": 2}
+    h = Harness(
+        root=tmp_path,
+        client=FakeClient([f"```python\n{FLAT}```"]),
+        detect=lambda r: [finding],
+        max_attempts=1,
+    )
+    [target] = select_targets([finding], tmp_path)
+    assert h.refactor(target).status == "error"
+    assert (outside / "m.py").read_text() == NESTED

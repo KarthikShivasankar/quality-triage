@@ -1084,15 +1084,20 @@ class Harness:
             files, err = apply_edits(
                 self._read, edits, new_files, allowed, Path(u.file).parent.as_posix()
             )
-            unsafe = [f for f in files if not safe_relpath(self.root, f)]
-            if unsafe:
-                err = f"paths outside the project or through a symlink: {unsafe}"
             if err:
                 c["edit_error"] = err
                 return None
         else:
             new_source, lo, hi = splice(source, u, attempt.code)
             files = {u.file: new_source}
+        # every write target must lie inside the project, never through a symlink;
+        # checked before anything is written, so restore never touches other paths
+        unsafe = [f for f in files if not safe_relpath(self.root, f)]
+        if unsafe:
+            c["edit_error"] = (
+                f"paths outside the project or through a symlink: {unsafe}"
+            )
+            return None
         old = {f: self._read(f) for f in files}
         for f, text in files.items():
             try:
@@ -1180,6 +1185,10 @@ class Harness:
 
     def refactor(self, target: Target, apply: bool = False) -> Outcome:
         self.prepare()
+        if not safe_relpath(self.root, target.unit.file):
+            return Outcome(
+                target, "error", [Attempt("", None, None, {"error": "unsafe path"})]
+            )
         path = self.root / target.unit.file
         source = path.read_text(encoding="utf-8")
         unit = relocate(source, target.unit)
