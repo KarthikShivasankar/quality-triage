@@ -306,7 +306,12 @@ class FindingNormalizer:
                 return
 
         name = smell.get("name", "Unknown")
-        fp = smell.get("file_path", "")
+        # cross-file smells (duplicate code, data clumps, ...) list several files
+        paths = [
+            p.strip() for p in str(smell.get("file_path") or "").split(",") if p.strip()
+        ]
+        fp = paths[0] if paths else ""
+        related = [_rel(p, self.root) for p in paths[1:]]
         line = int(smell.get("line_number", 0) or 0)
         sev_raw = str(smell.get("severity", "medium") or "medium").lower()
         sev = _SEVERITY_STR.get(sev_raw, Severity.MEDIUM)
@@ -330,6 +335,7 @@ class FindingNormalizer:
                         "PYAS": "architectural",
                         "PYSS": "structural",
                     }.get(prefix, "code"),
+                    **({"related_files": related} if related else {}),
                 },
             )
         )

@@ -39,14 +39,16 @@ from typing import Any, Callable
 from code_review_agent.llm import CompletionResult, LLMClient, complete_guarded
 from code_review_agent.tools import is_test_file
 
-# Whole-module or cross-module findings cannot be fixed by rewriting one unit.
-UNFIXABLE_CATEGORIES = re.compile(
+# Rules about a whole module or several modules: always handled in edit mode on
+# the module (the model may split it into new private modules, or decline).
+CROSS_MODULE_RULES = re.compile(
     r"orphan module|hub-like|cyclic|unstable dependenc|god object|long file|"
     r"high lines of code|number of classes|classes per module|scattered|"
     r"potential improper api|redundant abstraction|parallel inheritance|"
     r"high fan-|alternative classes|unit testing checker",
     re.IGNORECASE,
 )
+UNFIXABLE_CATEGORIES = CROSS_MODULE_RULES  # former name
 
 REFACTOR_SYSTEM_PROMPT = """You are refactoring Python code. A deterministic detector reported the finding below inside this code unit. Refactor the unit to remove the underlying design problem while preserving external behaviour exactly.
 
@@ -58,6 +60,34 @@ Rules:
 - If the finding is a false positive, or cannot be fixed inside this unit without changing its interface or other files, reply exactly: NO_CHANGE: <one-sentence reason>
 - Otherwise reply with exactly one fenced ```python block holding the complete replacement for the unit (plus any helpers and imports) and nothing else."""
 
+EDIT_SYSTEM_PROMPT = """You are refactoring Python code. A deterministic detector reported the finding below. The code is too large to rewrite in one piece, or the fix spans files, so you reply with exact edits. Remove the underlying design problem while preserving external behaviour exactly.
+
+Reply format (one block per edit; SEARCH must be copied exactly from the current file and match exactly once):
+FILE: <path relative to the project root>
+<<<<<<< SEARCH
+<exact existing lines>
+=======
+<replacement lines>
+>>>>>>> REPLACE
+
+To move code out of a module, you may create new private modules in the same directory:
+NEW FILE: <same directory>/_<name>.py
+```python
+<module content>
+```
+
+Rules:
+- Every public function, class, method, signature, class attribute and module-level name must stay importable from where it is now (re-export moved code with an import).
+- Never add *args/**kwargs to existing callables. Only edit the files shown to you.
+- Improve the design the rule names; do not just make the detector stop matching. Not allowed: binding imported names to local aliases, suppression comments (noqa, pylint, mlscent: ignore, type: ignore), semicolons or packing statements onto one line, building strings from character codes, statements that only touch a name, deleting behaviour, reusing an existing function or class name for a new helper.
+- If the finding is a false positive, or cannot be fixed without changing behaviour or the public interface, reply exactly: NO_CHANGE: <one-sentence reason>"""
+
+_EDIT_RE = re.compile(
+    r"FILE:\s*(\S+)\s*\n<<<<<<< SEARCH\n(.*?)\n?=======\n(.*?)\n?>>>>>>> REPLACE", re.S
+)
+_NEW_FILE_RE = re.compile(
+    r"NEW FILE:\s*(\S+)\s*\n```(?:python|py)?[^\n]*\n(.*?)```", re.S
+)
 _PY_BLOCK = re.compile(r"```(?:python|py)?[^\n]*\n(.*?)```", re.S)
 _DECLINE = re.compile(r"^\s*NO_CHANGE\s*:\s*(.+)", re.I | re.M)
 _SUPPRESS = re.compile(
@@ -92,6 +122,9 @@ class Target:
     unit: Unit
     # other findings inside the same unit; the model is asked to fix them too
     related: list[dict[str, Any]] = field(default_factory=list)
+    # True: the model answers with SEARCH/REPLACE edits (large unit, module-wide or
+    # cross-file rule) instead of the whole unit
+    edit: bool = False
 
     @property
     def category(self) -> str:
@@ -118,6 +151,7 @@ class Outcome:
     attempts: list[Attempt]
     new_source: str | None = None
     diff: str = ""
+    files: dict[str, str] = field(default_factory=dict)  # every touched/new file
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -187,11 +221,18 @@ def select_targets(
     max_unit_lines: int = 200,
     max_module_lines: int = 250,
     include: re.Pattern[str] | None = None,
-    exclude: re.Pattern[str] | None = UNFIXABLE_CATEGORIES,
+    exclude: re.Pattern[str] | None = None,
 ) -> list[Target]:
     """One target per unit: the first finding inside it, with the unit's other
-    findings in ``related``. File-level findings (line 0) target the whole
-    module when it has at most ``max_module_lines``."""
+    findings in ``related``. Every finding outside test code gets a target:
+
+    - inside a function/class (else a module-level statement): that unit,
+      rewritten whole up to ``max_unit_lines``, larger ones in edit mode;
+    - file-level (line 0): the whole module, rewritten whole up to
+      ``max_module_lines``, larger ones in edit mode;
+    - module-wide or cross-module rules, and findings that name several files:
+      the module in edit mode (the other files are shown and may be edited).
+    """
     root = Path(root)
     sources: dict[str, str] = {}
     seen: dict[tuple[str, int, str], Target] = {}
@@ -210,24 +251,32 @@ def select_targets(
                 ast.parse(sources[f["file"]])
             except (OSError, SyntaxError, UnicodeDecodeError):
                 sources[f["file"]] = ""
-        if not sources[f["file"]]:
+        src = sources[f["file"]]
+        if not src:
             continue
-        unit = target_unit(
-            sources[f["file"]],
-            f.get("line", 0),
-            f["file"],
-            max_unit_lines=max_unit_lines,
-            max_module_lines=max_module_lines,
-        )
-        if unit is None:
-            continue
-        key = (f["file"], unit.start, unit.kind)
-        if unit.kind == "module":
-            key = (f["file"], 0, cat)  # one whole-module target per rule
+        n = len(src.splitlines())
+        if (
+            CROSS_MODULE_RULES.search(cat)
+            or f.get("related_files")
+            or f.get("line", 0) <= 0
+        ):
+            unit = Unit(f["file"], 1, n, Path(f["file"]).stem or "module", "module", 0)
+            edit = n > max_module_lines or bool(
+                CROSS_MODULE_RULES.search(cat) or f.get("related_files")
+            )
+            key = (f["file"], 0, cat)  # one module target per rule
+        else:
+            unit = enclosing_unit(src, f["line"], f["file"]) or module_statement(
+                src, f["line"], f["file"]
+            )
+            if unit is None:
+                continue
+            edit = unit.end - unit.start + 1 > max_unit_lines
+            key = (f["file"], unit.start, unit.kind)
         if key in seen:
             seen[key].related.append(dict(f))
             continue
-        seen[key] = Target(finding=dict(f), unit=unit)
+        seen[key] = Target(finding=dict(f), unit=unit, edit=edit)
         out.append(seen[key])
     return out
 
@@ -284,6 +333,57 @@ def parse_reply(text: str) -> tuple[str | None, str | None]:
     if m:
         return None, m.group(1).strip()
     return None, None
+
+
+def parse_edits(text: str) -> tuple[list[tuple[str, str, str]], dict[str, str]]:
+    """SEARCH/REPLACE edits and NEW FILE blocks from an edit-mode reply."""
+    edits = [(p.strip(), s_, r) for p, s_, r in _EDIT_RE.findall(text or "")]
+    new_files = {p.strip(): c for p, c in _NEW_FILE_RE.findall(text or "")}
+    return edits, new_files
+
+
+def apply_edits(
+    read: Callable[[str], str | None],
+    edits: list[tuple[str, str, str]],
+    new_files: dict[str, str],
+    allowed: set[str],
+    new_dir: str,
+) -> tuple[dict[str, str], str | None]:
+    """New contents of every touched file, or an error explaining why not.
+
+    ``read(path)`` returns the current text of a project file (None if absent).
+    Edits may touch only ``allowed`` files; new files must be new private
+    modules (``_name.py``) in ``new_dir``.
+    """
+    out: dict[str, str] = {}
+    for path, search, replace in edits:
+        if path not in allowed:
+            return {}, f"edit to a file that was not shown: {path}"
+        text = out[path] if path in out else read(path)
+        hits = (text or "").count(search) if search else 0
+        if hits != 1:
+            return {}, (
+                f"SEARCH block for {path} matches {hits} times, it must match "
+                f"exactly once: {search[:120]!r}"
+            )
+        out[path] = text.replace(search, replace, 1)
+    for path, code in new_files.items():
+        p = Path(path)
+        if (
+            p.parent.as_posix() != new_dir
+            or not p.name.startswith("_")
+            or p.suffix != ".py"
+        ):
+            return (
+                {},
+                f"new file must be a private module (_name.py) in {new_dir}/: {path}",
+            )
+        if read(path) is not None:
+            return {}, f"new file already exists: {path}"
+        out[path] = code if code.endswith("\n") else code + "\n"
+    if not out:
+        return {}, "no FILE/SEARCH/REPLACE or NEW FILE blocks found"
+    return out, None
 
 
 def splice(source: str, unit: Unit, new_code: str) -> tuple[str, int, int]:
@@ -558,8 +658,12 @@ def rule_delta(
     after: list[dict[str, Any]],
     target: Target,
     new_span: tuple[int, int],
+    touched: set[str] | None = None,
 ) -> dict[str, Any]:
-    """Compare detector findings in the unit before and after the rewrite."""
+    """Compare detector findings in the unit before and after the rewrite.
+
+    ``touched`` (edit mode): new rules are counted over every changed or new file,
+    since moved code may carry its findings to another file."""
     u = target.unit
 
     def count(fs: list[dict], lo: int, hi: int) -> Counter:
@@ -574,11 +678,17 @@ def rule_delta(
     else:
         b = count(before, u.start, u.end)
         a = count(after, *new_span)
+    if touched:
+        tb = Counter(f["category"] for f in before if f["file"] in touched)
+        ta = Counter(f["category"] for f in after if f["file"] in touched)
+        new_rules = sorted(k for k in ta if ta[k] > tb.get(k, 0))
+    else:
+        new_rules = sorted(k for k in a if a[k] > b.get(k, 0))
     return {
         "target_removed": a[target.category] < b[target.category],
         "before": dict(b),
         "after": dict(a),
-        "new_rules": sorted(k for k in a if a[k] > b.get(k, 0)),
+        "new_rules": new_rules,
         "unit_findings_before": sum(b.values()),
         "unit_findings_after": sum(a.values()),
         "file_findings_before": sum(file_b.values()),
@@ -703,11 +813,82 @@ def build_messages(
     ]
 
 
+def build_edit_messages(
+    target: Target, read: Callable[[str], str | None], max_related_lines: int = 800
+) -> list[dict[str, str]]:
+    """Edit-mode prompt: the finding(s), the target code and any related files."""
+    u = target.unit
+    source = read(u.file) or ""
+    keys = ("tool", "category", "severity", "file", "line", "message", "how_to_fix")
+    finding = {k: target.finding.get(k) for k in keys}
+    user = f"Finding:\n```json\n{json.dumps(finding, indent=1, default=str)}\n```\n\n"
+    if target.related:
+        others = [
+            {k: f.get(k) for k in ("category", "line", "message")}
+            for f in target.related
+        ]
+        user += (
+            "Other findings here; fix them too where you can do so honestly:\n"
+            f"```json\n{json.dumps(others, indent=1, default=str)}\n```\n\n"
+        )
+    if u.kind == "module":
+        user += f"File `{u.file}`:\n```python\n{source}```\n\n"
+    else:
+        user += (
+            f"Code unit in `{u.file}` (lines {u.start}-{u.end}); SEARCH text must be "
+            f"copied from it:\n```python\n{unit_source(source, u)}```\n\n"
+        )
+    for rel in edit_files(target)[1:]:
+        text = read(rel)
+        if text is None:
+            continue
+        lines = text.splitlines(keepends=True)
+        cut = (
+            ""
+            if len(lines) <= max_related_lines
+            else f" (first {max_related_lines} lines)"
+        )
+        user += f"Related file `{rel}`{cut}:\n```python\n{''.join(lines[:max_related_lines])}```\n\n"
+    user += (
+        f"New private modules may be created in `{Path(u.file).parent.as_posix()}/`."
+    )
+    return [
+        {"role": "system", "content": EDIT_SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+def edit_files(target: Target) -> list[str]:
+    """Files an edit-mode reply may change: the target file, then related files."""
+    files = [target.unit.file]
+    for f in [target.finding, *target.related]:
+        for rel in f.get("related_files") or []:
+            if rel not in files and not is_test_file(rel):
+                files.append(rel)
+    return files
+
+
+def _node_at(source: str, unit: Unit) -> ast.AST | None:
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            start = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+            if start == unit.start and node.name == unit.name:
+                return node
+    return None
+
+
 def feedback_message(attempt: Attempt) -> str:
     c = attempt.checks
     problems = []
+    edit = c.get("mode") == "edit"
     if attempt.code is None and attempt.declined is None:
-        problems.append("No ```python block or NO_CHANGE line was found in your reply.")
+        problems.append(
+            "No FILE/SEARCH/REPLACE blocks or NO_CHANGE line were found in your reply."
+            if edit
+            else "No ```python block or NO_CHANGE line was found in your reply."
+        )
+    if c.get("edit_error"):
+        problems.append(f"The edits could not be applied: {c['edit_error']}")
     if c.get("compiles") is False:
         problems.append(f"The patched file does not compile: {c.get('compile_error')}")
     if c.get("interface") is False:
@@ -736,13 +917,54 @@ def feedback_message(attempt: Attempt) -> str:
             f"(before {beh.get('baseline')}, after {beh.get('result')}). Output tail:\n"
             f"```\n{beh.get('tail', '')}\n```"
         )
+    again = (
+        "corrected FILE/SEARCH/REPLACE blocks (SEARCH copied from the ORIGINAL code shown first)"
+        if edit
+        else "the complete replacement unit in one ```python block"
+    )
     return (
         "Your rewrite was rejected:\n- "
         + "\n- ".join(problems)
-        + "\n\nFix these problems and reply with the complete replacement unit in one "
-        "```python block, or NO_CHANGE: <reason> if the finding cannot be fixed honestly "
-        "inside this unit."
+        + f"\n\nFix these problems and reply with {again}, or NO_CHANGE: <reason> if the "
+        "finding cannot be fixed honestly."
     )
+
+
+def edit_interface(
+    target: Target, old: dict[str, str | None], new: dict[str, str]
+) -> tuple[bool, str]:
+    """Every public name of every changed file stays importable with the same
+    interface; definitions may move into a new file if the old module imports them."""
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    moved: dict[str, ast.AST] = {}
+    for f, text in new.items():
+        if old.get(f) is None:
+            for node in ast.parse(text).body:
+                if isinstance(node, defs):
+                    moved.setdefault(node.name, node)
+    u = target.unit
+    for f, text in new.items():
+        if old.get(f) is None:
+            continue
+        o, n = ast.parse(old[f]), ast.parse(text)
+        lost = sorted(
+            m for m in _bound_names(o) - _bound_names(n) if not m.startswith("_")
+        )
+        if lost:
+            return False, f"{f}: public names no longer bound: {lost}"
+        here = {d.name: d for d in n.body if isinstance(d, defs)}
+        for d in o.body:
+            if isinstance(d, defs) and not d.name.startswith("_"):
+                if not _same_interface(d, here.get(d.name) or moved.get(d.name)):
+                    if d.name in here or d.name in moved:
+                        return False, f"{f}: interface of `{d.name}` changed"
+        if f == u.file and u.kind in ("function", "class"):
+            nu = relocate(text, u)
+            if nu is None or not _same_interface(
+                _node_at(old[f], u), _node_at(text, nu)
+            ):
+                return False, f"interface of `{u.name}` changed or it was removed"
+    return True, ""
 
 
 # ---------------------------------------------------------------------------
@@ -769,6 +991,7 @@ def default_detect(tools: tuple[str, ...] = ("python-smells", "ml-smells")) -> D
                 "line": f.line,
                 "message": f.message,
                 "how_to_fix": f.how_to_fix,
+                "related_files": f.extra.get("related_files"),
             }
             for f in res.report.findings
         ]
@@ -820,35 +1043,85 @@ class Harness:
         """One call; an empty or cut-off answer is retried (silent-failure guard)."""
         return complete_guarded(self.client, messages)
 
-    def check(self, target: Target, source: str, attempt: Attempt) -> str | None:
-        """Fill ``attempt.checks``; return the patched source if all checks pass."""
+    def _read(self, rel: str) -> str | None:
+        path = self.root / rel
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+    def check(
+        self, target: Target, source: str, attempt: Attempt
+    ) -> dict[str, str] | None:
+        """Fill ``attempt.checks``; return {file: new text} if every check passes."""
         c = attempt.checks
         c["category"] = target.category
         if attempt.code is None:
             return None
-        old_unit = unit_source(source, target.unit)
-        new_source, lo, hi = splice(source, target.unit, attempt.code)
-        try:
-            compile(new_source, target.unit.file, "exec")
-            c["compiles"] = True
-        except SyntaxError as exc:
-            c["compiles"], c["compile_error"] = False, str(exc)
-            return None
-        ok, why = interface_preserved(old_unit, attempt.code, target.unit)
+        u = target.unit
+        if target.edit:
+            c["mode"] = "edit"
+            edits, new_files = parse_edits(attempt.code)
+            files, err = apply_edits(
+                self._read,
+                edits,
+                new_files,
+                set(edit_files(target)),
+                Path(u.file).parent.as_posix(),
+            )
+            if err:
+                c["edit_error"] = err
+                return None
+        else:
+            new_source, lo, hi = splice(source, u, attempt.code)
+            files = {u.file: new_source}
+        old = {f: self._read(f) for f in files}
+        for f, text in files.items():
+            try:
+                compile(text, f, "exec")
+            except SyntaxError as exc:
+                c["compiles"], c["compile_error"] = False, f"{f}: {exc}"
+                return None
+        c["compiles"] = True
+        if target.edit:
+            ok, why = edit_interface(target, old, files)
+            flags: set[str] = set()
+            for f, text in files.items():
+                flags |= set(gaming_flags(old[f] or "", text, old[f] or text))
+            c["gaming"] = sorted(flags)
+            if u.kind == "module":
+                lo, hi = (
+                    1,
+                    len(files[u.file].splitlines()) if u.file in files else u.end,
+                )
+            else:
+                nu = relocate(files.get(u.file, source), u)
+                lo, hi = (nu.start, nu.end) if nu else (u.start, u.end)
+        else:
+            old_unit = unit_source(source, u)
+            ok, why = interface_preserved(old_unit, attempt.code, u)
+            c["gaming"] = gaming_flags(old_unit, attempt.code, source)
         c["interface"] = ok
         if not ok:
             c["interface_error"] = why
-        c["gaming"] = gaming_flags(old_unit, attempt.code, source)
         c["name_collisions"] = sorted(
-            duplicate_definitions(new_source) - duplicate_definitions(source)
+            set().union(
+                *(
+                    duplicate_definitions(t) - duplicate_definitions(old[f] or "")
+                    for f, t in files.items()
+                )
+            )
         )
         c["span"] = [lo, hi]
-        path = self.root / target.unit.file
-        path.write_text(new_source, encoding="utf-8")
+        if target.edit:
+            c["files"] = sorted(files)
         try:
+            for f, text in files.items():
+                (self.root / f).write_text(text, encoding="utf-8")
             after = self.detect(self.root)
             c["detectors"] = rule_delta(
-                self.baseline_findings or [], after, target, (lo, hi)
+                self.baseline_findings or [],
+                after,
+                target,
+                (lo, hi),
+                touched=set(files) if target.edit else None,
             )
             beh = self.behaviour()
             if beh is not None:
@@ -868,7 +1141,11 @@ class Harness:
                     "tail": beh.get("tail", "")[-800:],
                 }
         finally:
-            path.write_text(source, encoding="utf-8")
+            for f in files:
+                if old[f] is None:
+                    (self.root / f).unlink(missing_ok=True)
+                else:
+                    (self.root / f).write_text(old[f], encoding="utf-8")
         det = c["detectors"]
         attempt.passed = (
             c["interface"]
@@ -878,7 +1155,7 @@ class Harness:
             and (det["target_removed"] or not self.require_removal)
             and (c.get("behaviour") or {"same": True})["same"]
         )
-        return new_source if attempt.passed else None
+        return files if attempt.passed else None
 
     def refactor(self, target: Target, apply: bool = False) -> Outcome:
         self.prepare()
@@ -890,7 +1167,11 @@ class Harness:
                 target, "error", [Attempt("", None, None, {"error": "unit not found"})]
             )
         target.unit = unit
-        messages = build_messages(target, source, self.grounded)
+        messages = (
+            build_edit_messages(target, self._read)
+            if target.edit
+            else build_messages(target, source, self.grounded)
+        )
         attempts: list[Attempt] = []
         for i in range(self.max_attempts):
             self.note(
@@ -905,7 +1186,12 @@ class Harness:
                     )
                 )
                 return Outcome(target, "error", attempts)
-            code, declined = parse_reply(res.content)
+            if target.edit:
+                edits, new_files = parse_edits(res.content)
+                code = res.content if (edits or new_files) else None
+                declined = None if code else parse_reply(res.content)[1]
+            else:
+                code, declined = parse_reply(res.content)
             att = Attempt(
                 reply=res.content,
                 code=code,
@@ -918,20 +1204,32 @@ class Harness:
             attempts.append(att)
             if declined:
                 return Outcome(target, "declined", attempts)
-            new_source = self.check(target, source, att)
-            if new_source is not None:
+            files = self.check(target, source, att)
+            if files is not None:
+                old = {f: self._read(f) or "" for f in files}
                 if apply:
-                    path.write_text(new_source, encoding="utf-8")
+                    for f, text in files.items():
+                        (self.root / f).write_text(text, encoding="utf-8")
                     self.baseline_findings = self.detect(self.root)
                 diff = "".join(
-                    difflib.unified_diff(
-                        source.splitlines(keepends=True),
-                        new_source.splitlines(keepends=True),
-                        f"a/{target.unit.file}",
-                        f"b/{target.unit.file}",
+                    "".join(
+                        difflib.unified_diff(
+                            old[f].splitlines(keepends=True),
+                            text.splitlines(keepends=True),
+                            f"a/{f}",
+                            f"b/{f}",
+                        )
                     )
+                    for f, text in files.items()
                 )
-                return Outcome(target, "accepted", attempts, new_source, diff)
+                return Outcome(
+                    target,
+                    "accepted",
+                    attempts,
+                    files.get(target.unit.file),
+                    diff,
+                    files,
+                )
             messages = messages + [
                 {"role": "assistant", "content": res.content or "(empty reply)"},
                 {"role": "user", "content": feedback_message(att)},

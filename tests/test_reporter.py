@@ -302,3 +302,20 @@ def test_ml_severity_is_graded():
     assert ml_severity("Randomness Control Checker", 0, "framework") == Severity.LOW
     assert ml_severity("Chain Indexing", 12, "framework") == Severity.HIGH
     assert ml_severity("Inefficient Operations", 12, "general") == Severity.MEDIUM
+
+
+def test_cross_file_python_smell_is_split():
+    from code_review_agent.reporter import FindingNormalizer
+
+    raw = {
+        "code_smells": [
+            {
+                "name": "Duplicate Code",
+                "file_path": "/p/a.py, /p/pkg/b.py",
+                "line_number": 0,
+                "description": "dup",
+            }
+        ]
+    }
+    [f] = FindingNormalizer("/p").normalize_python_smells(raw)
+    assert f.file == "a.py" and f.extra["related_files"] == ["pkg/b.py"]

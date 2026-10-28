@@ -88,7 +88,7 @@ def test_enclosing_unit_prefers_function():
     )
 
 
-def test_select_targets_skips_module_level_and_unfixable(tmp_path):
+def test_select_targets_covers_every_finding(tmp_path):
     (tmp_path / "m.py").write_text(SOURCE)
     findings = [
         {"category": "Deep Nesting", "file": "m.py", "line": 7},
@@ -97,7 +97,12 @@ def test_select_targets_skips_module_level_and_unfixable(tmp_path):
         {"category": "Long File", "file": "m.py", "line": 0},
     ]
     targets = select_targets(findings, tmp_path)
-    assert [(t.unit.name, t.category) for t in targets] == [("size", "Deep Nesting")]
+    assert [(t.unit.kind, t.category, t.edit) for t in targets] == [
+        ("function", "Deep Nesting", False),
+        ("module", "Orphan Module", True),
+        ("module", "Long File", True),
+    ]
+    assert len(targets[0].related) == 1
 
 
 def test_parse_reply():
@@ -380,3 +385,76 @@ def test_duplicate_definitions_and_collision_rejected(tmp_path):
     outcome = h.refactor(target)
     assert outcome.status == "rejected"
     assert outcome.attempts[0].checks["name_collisions"] == ["<module>._both"]
+
+
+def test_parse_and_apply_edits():
+    from code_review_agent.refactor import apply_edits, parse_edits
+
+    files = {"pkg/m.py": "a = 1\nb = 2\n"}
+    reply = (
+        "FILE: pkg/m.py\n<<<<<<< SEARCH\nb = 2\n=======\nfrom ._b import b\n>>>>>>> REPLACE\n"
+        "NEW FILE: pkg/_b.py\n```python\nb = 2\n```\n"
+    )
+    edits, new = parse_edits(reply)
+    out, err = apply_edits(files.get, edits, new, {"pkg/m.py"}, "pkg")
+    assert err is None
+    assert out == {"pkg/m.py": "a = 1\nfrom ._b import b\n", "pkg/_b.py": "b = 2\n"}
+    _, err = apply_edits(
+        files.get, [("pkg/m.py", "c = 3", "")], {}, {"pkg/m.py"}, "pkg"
+    )
+    assert "matches 0 times" in err
+    _, err = apply_edits(files.get, [], {"other/x.py": "x = 1"}, {"pkg/m.py"}, "pkg")
+    assert "private module" in err
+
+
+def test_harness_edit_mode_splits_module(tmp_path):
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    big = "def keep(x):\n    return x\n\n\ndef move(y):\n    return y * 2\n"
+    (tmp_path / "pkg" / "m.py").write_text(big)
+
+    def long_file(root):
+        out = []
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root).as_posix()
+            if len(path.read_text().splitlines()) > 5:
+                out.append({"category": "Long File", "file": rel, "line": 0})
+        return out
+
+    reply = (
+        "FILE: pkg/m.py\n<<<<<<< SEARCH\ndef move(y):\n    return y * 2\n=======\n"
+        "from pkg._moved import move  # re-export\n>>>>>>> REPLACE\n"
+        "NEW FILE: pkg/_moved.py\n```python\ndef move(y):\n    return y * 2\n```\n"
+    )
+    h = Harness(
+        root=tmp_path, client=FakeClient([reply]), detect=long_file, max_attempts=1
+    )
+    h.prepare()
+    [target] = select_targets(h.baseline_findings, tmp_path)
+    assert target.edit and target.unit.kind == "module"
+    outcome = h.refactor(target, apply=True)
+    assert outcome.status == "accepted", outcome.attempts[0].checks
+    assert sorted(outcome.files) == ["pkg/_moved.py", "pkg/m.py"]
+    assert (tmp_path / "pkg" / "_moved.py").exists()
+    assert "def keep" in (tmp_path / "pkg" / "m.py").read_text()
+
+
+def test_harness_edit_mode_rejects_lost_public_name(tmp_path):
+    (tmp_path / "m.py").write_text(
+        "def keep(x):\n    return x\n\n\ndef gone(y):\n    return y\n"
+    )
+    reply = "FILE: m.py\n<<<<<<< SEARCH\ndef gone(y):\n    return y\n=======\n>>>>>>> REPLACE\n"
+
+    def detect(root):
+        if "gone" in (root / "m.py").read_text():
+            return [{"category": "Long File", "file": "m.py", "line": 0}]
+        return []
+
+    h = Harness(
+        root=tmp_path, client=FakeClient([reply]), detect=detect, max_attempts=1
+    )
+    h.prepare()
+    [target] = select_targets(h.baseline_findings, tmp_path)
+    outcome = h.refactor(target)
+    assert outcome.status == "rejected"
+    assert "gone" in outcome.attempts[0].checks["interface_error"]
