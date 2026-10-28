@@ -122,7 +122,7 @@ code-review refactor <src> --model <model> --test-cmd "python -m pytest -q" --te
 code-review refactor <src> --category "Long Method" --max-targets 5 --apply
 ```
 
-Without `--apply` nothing changes on disk; read `reports/refactor.json` and `reports/refactor.diff`. A rewrite is kept only if it compiles, keeps the unit's interface, removes the targeted rule without adding others, adds no detector-gaming pattern and leaves the test command's result unchanged. `declined` means the model judged the finding a false positive or not fixable inside the unit. Always give `--test-cmd` when the project has tests.
+Without `--apply` nothing changes on disk; read `reports/refactor.json` and `reports/refactor.diff`. Targets are the enclosing function or class, a module-level statement, or the whole module (file-level findings, files up to `--max-module-lines`); test code is never targeted. A rewrite is kept only if it compiles, keeps the unit's interface (signatures, public methods and class attributes, bound module names), removes the targeted rule without adding others, adds no detector-gaming pattern or colliding helper name, and leaves the test command's result unchanged. `declined` means the model judged the finding a false positive or not fixable inside the unit. Always give `--test-cmd` when the project has tests. For reasoning models pass `--max-tokens 16384 --timeout 3600`; `llm.extra_body` in `config.yaml` sets server options such as vLLM's `chat_template_kwargs`.
 
 ### Technical debt
 

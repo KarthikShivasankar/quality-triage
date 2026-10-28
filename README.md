@@ -79,7 +79,7 @@ Default path is **hybrid**:
 
 `--agentic` restores the older LLM-orchestrated tool loop. Prefer hybrid or `--no-llm` for CI and tests.
 
-The narrative is checked against the findings: every `[id]` and `file:line` it cites must match a detector finding, otherwise the report ends with a **Grounding check** note listing the unmatched citations. An empty model answer is retried once and then reported as a synthesis failure, never as a clean report. When there are more findings than fit in the prompt (80), the most severe are kept, spread across files, and the rest are summarised by category.
+The narrative is checked against the findings: every `[id]` and `file:line` it cites must match a detector finding, otherwise the report ends with a **Grounding check** note listing the unmatched citations. An empty model answer is retried once, and an answer cut off at the token limit is retried with twice the budget; if that fails too it is reported as a synthesis failure, never as a clean report. When there are more findings than fit in the prompt (80), the most severe are kept, spread across files, and the rest are summarised by category.
 
 ## Refactoring
 
@@ -99,7 +99,10 @@ For each finding the model rewrites the smallest unit that contains it: the encl
 1. compile and keep the unit's interface: name, parameters, defaults, decorators and public methods of a function or class; every name a module-level statement binds; every public definition and module-level name of a whole module;
 2. make the targeted rule fire less often in the unit, with no other rule firing more;
 3. add none of the patterns that satisfy a detector without fixing the design: aliasing imported names, suppression comments (`noqa`, `mlscent: ignore`, …), packing statements with `;`, strings built from `chr()`, statements that only touch a name;
-4. leave `--test-cmd` with the same exit code, no fewer passes and no more failures.
+4. not define a helper whose name is already taken in the same scope (it would silently replace the existing definition);
+5. leave `--test-cmd` with the same exit code, no fewer passes and no more failures.
+
+Test code (`tests/` and `testing/` directories, `test_*.py`, `*_test.py`, `conftest.py`) is never analysed or refactored (`tools.skip_tests`), so the project's own tests remain an unchanged oracle. Each prompt lists every other finding in the same unit, so one rewrite can remove several. With `--apply`, every rewrite is checked against the code that already contains the earlier ones.
 
 Failed checks go back to the model, up to `--max-attempts` times. The model may answer `NO_CHANGE: <reason>` for a false positive or a finding that cannot be fixed inside the unit; that is reported as *declined*. Every attempt is recorded in `--output` (JSON), and accepted rewrites are written as one unified diff next to it.
 
@@ -117,6 +120,8 @@ llm:
   temperature: 0
   num_retries: 2
   drop_params: true
+  extra_body: null               # server-specific request fields, e.g.
+                                 # {chat_template_kwargs: {reasoning_effort: medium}} on vLLM
   fallbacks: []                  # e.g. [groq/llama-3.3-70b-versatile]
 
 aliases:
@@ -132,7 +137,7 @@ This GGUF is **completion-only** (no native tool calling). Use hybrid `review` o
 
 GitHub clones (`github.fetch_issues`, default on) pull the most recently opened issues (default 10, max 30) into the TD classifier. Set `GITHUB_TOKEN` for private repos and a higher API rate limit.
 
-Smell thresholds stay under `code_smells`, `architectural_smells`, and `structural_smells`.
+Smell thresholds stay under `code_smells`, `architectural_smells`, and `structural_smells`; they are applied on top of PyExamine's bundled defaults. ML findings are graded: line-level framework misuse is high, other line-level checks medium, and module-wide heuristics, docstrings, magic numbers and hard-coded paths low. `tools.skip_tests: true` (default) keeps test code out of every detector.
 
 ### Environment variables
 
