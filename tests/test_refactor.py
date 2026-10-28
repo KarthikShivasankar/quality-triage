@@ -100,9 +100,9 @@ def test_select_targets_covers_every_finding(tmp_path):
     assert [(t.unit.kind, t.category, t.edit) for t in targets] == [
         ("function", "Deep Nesting", False),
         ("module", "Orphan Module", True),
-        ("module", "Long File", True),
     ]
     assert len(targets[0].related) == 1
+    assert [f["category"] for f in targets[1].related] == ["Long File"]
 
 
 def test_parse_reply():
@@ -299,7 +299,7 @@ def test_select_targets_includes_statements_and_modules(tmp_path):
     assert [(t.unit.kind, t.category) for t in targets] == [
         ("statement", "Magic number detected"),
         ("module", "Randomness Control Checker"),
-    ]
+    ]  # one module target per file
 
 
 def test_harness_module_level_targets(tmp_path):

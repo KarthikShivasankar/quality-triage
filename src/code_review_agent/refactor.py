@@ -264,7 +264,7 @@ def select_targets(
             edit = n > max_module_lines or bool(
                 CROSS_MODULE_RULES.search(cat) or f.get("related_files")
             )
-            key = (f["file"], 0, cat)  # one module target per rule
+            key = (f["file"], 0, "module")  # one module target per file, all its rules
         else:
             unit = enclosing_unit(src, f["line"], f["file"]) or module_statement(
                 src, f["line"], f["file"]
